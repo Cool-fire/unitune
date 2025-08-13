@@ -51,8 +51,11 @@ export class EksStack extends cdk.Stack {
             `vpcCniRole-${this.cluster.clusterName}`,
             {
                 roleName: `vpcCniRole-${this.cluster.clusterName}`,
-                assumedBy: new OpenIdConnectPrincipal(this.cluster.openIdConnectProvider),
-                managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_CNI_Policy')],
+                assumedBy: new ServicePrincipal("pods.eks.amazonaws.com"),
+                managedPolicies: [
+                    ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_CNI_Policy'),
+                    ManagedPolicy.fromAwsManagedPolicyName('AmazonEKSClusterPolicy'),
+                ],
             }
         );
 
@@ -68,8 +71,11 @@ export class EksStack extends cdk.Stack {
             `efiCsiRole-${this.cluster.clusterName}`,
             {
                 roleName: `efsCsiRole-${this.cluster.clusterName}`,
-                assumedBy: new OpenIdConnectPrincipal(this.cluster.openIdConnectProvider),
-                managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonEFSCSIDriverPolicy')],
+                assumedBy: new ServicePrincipal("pods.eks.amazonaws.com"),
+                managedPolicies: [
+                    ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonEFSCSIDriverPolicy'),
+                    ManagedPolicy.fromAwsManagedPolicyName('AmazonEKSClusterPolicy'),
+                ],
             }
 
         )
@@ -79,12 +85,6 @@ export class EksStack extends cdk.Stack {
             serviceAccountRoleArn: efsCsiRole.roleArn,
             resolveConflicts: 'OVERWRITE',
         });
-
-        const eksPodAgentRole = new Role(this, 'EKSPodAgentRole', {
-            roleName: `eksPodAgentRole-${this.cluster.clusterName}`,
-            assumedBy: new ServicePrincipal('eks.amazonaws.com'),
-            managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_PodIdentityAgent')],
-        })
 
         const eksPodAgentAddon = new CfnAddon(this, 'EKSPodAgentAddon', {
             addonName: 'eks-pod-identity-agent',
