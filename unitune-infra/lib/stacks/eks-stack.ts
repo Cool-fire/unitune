@@ -3,7 +3,7 @@ import { Addon, CfnAddon, Cluster, EndpointAccess, KubernetesVersion } from "aws
 import { KubectlV32Layer } from "@aws-cdk/lambda-layer-kubectl-v32";
 import { IVpc } from "aws-cdk-lib/aws-ec2";
 import { Construct } from "constructs/lib/construct";
-import { ManagedPolicy, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import { ManagedPolicy, OpenIdConnectPrincipal, PolicyStatement, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 
 export interface EksStackProps extends cdk.StackProps {
     clusterName?: string;
@@ -46,8 +46,48 @@ export class EksStack extends cdk.Stack {
             resolveConflicts: 'OVERWRITE',
         });
 
+        const vpcRole = new Role(
+            this,
+            `vpcCniRole-${this.cluster.clusterName}`,
+            {
+                roleName: `vpcCniRole-${this.cluster.clusterName}`,
+                assumedBy: new OpenIdConnectPrincipal(this.cluster.openIdConnectProvider),
+                managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_CNI_Policy')],
+            }
+        );
+
+        const vpcAddon = new CfnAddon(this, 'VPCCNIAddon', {
+            addonName: 'vpc-cni',
+            clusterName: cluster.clusterName,
+            serviceAccountRoleArn: vpcRole.roleArn,
+            resolveConflicts: 'OVERWRITE',
+        });
+
+        const efsCsiRole = new Role(
+            this,
+            `efiCsiRole-${this.cluster.clusterName}`,
+            {
+                roleName: `efsCsiRole-${this.cluster.clusterName}`,
+                assumedBy: new OpenIdConnectPrincipal(this.cluster.openIdConnectProvider),
+                managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonEFSCSIDriverPolicy')],
+            }
+
+        )
         const efsCsiAddon = new CfnAddon(this, 'EFSCSIAddon', {
             addonName: 'aws-efs-csi-driver',
+            clusterName: cluster.clusterName,
+            serviceAccountRoleArn: efsCsiRole.roleArn,
+            resolveConflicts: 'OVERWRITE',
+        });
+
+        const eksPodAgentRole = new Role(this, 'EKSPodAgentRole', {
+            roleName: `eksPodAgentRole-${this.cluster.clusterName}`,
+            assumedBy: new ServicePrincipal('eks.amazonaws.com'),
+            managedPolicies: [ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_PodIdentityAgent')],
+        })
+
+        const eksPodAgentAddon = new CfnAddon(this, 'EKSPodAgentAddon', {
+            addonName: 'eks-pod-identity-agent',
             clusterName: cluster.clusterName,
             resolveConflicts: 'OVERWRITE',
         })
