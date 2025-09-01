@@ -10,7 +10,8 @@
     "test": "jest",
     "cdk": "cdk",
     "clean": "rm -rf dist cdk.out node_modules",
-    "format": "prettier --write --cache ."
+    "format": "prettier --write --cache .",
+    "prebuild": "npm run format"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
@@ -22,7 +23,7 @@
     "typescript": "~5.6.3"
   },
   "dependencies": {
-    "@aws-cdk/lambda-layer-kubectl-v32": "^2.0.0",
+    "@aws-cdk/lambda-layer-kubectl-v31": "^2.0.0",
     "aws-cdk-lib": "2.208.0",
     "constructs": "^10.0.0",
     "prettier": "^3.6.2"

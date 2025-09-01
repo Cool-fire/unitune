@@ -1,9 +1,25 @@
 import * as cdk from 'aws-cdk-lib';
-import { Addon, AuthenticationMode, CfnAddon, Cluster, EndpointAccess, KubernetesVersion } from 'aws-cdk-lib/aws-eks';
-import { KubectlV32Layer } from '@aws-cdk/lambda-layer-kubectl-v32';
-import { IVpc } from 'aws-cdk-lib/aws-ec2';
+import {
+  Addon,
+  AuthenticationMode,
+  CfnAddon,
+  Cluster,
+  ClusterLoggingTypes,
+  EndpointAccess,
+  KubernetesVersion,
+  NodegroupAmiType,
+} from 'aws-cdk-lib/aws-eks';
+import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
+import { IVpc, SubnetType } from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs/lib/construct';
-import { ManagedPolicy, OpenIdConnectPrincipal, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import {
+  Effect,
+  ManagedPolicy,
+  OpenIdConnectPrincipal,
+  PolicyStatement,
+  Role,
+  ServicePrincipal,
+} from 'aws-cdk-lib/aws-iam';
 
 export interface EksStackProps extends cdk.StackProps {
   clusterName?: string;
@@ -11,10 +27,12 @@ export interface EksStackProps extends cdk.StackProps {
 }
 
 export class EksStack extends cdk.Stack {
-  public readonly cluster: Cluster;
+  public cluster: Cluster;
 
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
+  constructor(scope: Construct, id: string, props: EksStackProps) {
     super(scope, id, props);
+    this.cluster = this.createCluster(props);
+    this.installEksAddons(this.cluster);
   }
 
   private createCluster(props: EksStackProps): Cluster {
@@ -22,11 +40,35 @@ export class EksStack extends cdk.Stack {
 
     const cluster = new Cluster(this, clusterName, {
       clusterName: clusterName,
-      version: KubernetesVersion.V1_32,
-      kubectlLayer: new KubectlV32Layer(this, `${clusterName}-kubectl-layer`),
+      version: KubernetesVersion.V1_31,
+      kubectlLayer: new KubectlV31Layer(this, `${clusterName}-kubectl-layer`),
       vpc: props.vpc,
+      vpcSubnets: [
+        {
+          availabilityZones: props.vpc?.availabilityZones.filter((zone) => zone !== 'us-east-1e'),
+        },
+      ],
+      defaultCapacity: 0,
       endpointAccess: EndpointAccess.PUBLIC_AND_PRIVATE,
       authenticationMode: AuthenticationMode.API_AND_CONFIG_MAP,
+      clusterLogging: [
+        ClusterLoggingTypes.API,
+        ClusterLoggingTypes.AUDIT,
+        ClusterLoggingTypes.AUTHENTICATOR,
+        ClusterLoggingTypes.CONTROLLER_MANAGER,
+        ClusterLoggingTypes.SCHEDULER,
+      ],
+    });
+
+    cluster.addNodegroupCapacity('default-node-group', {
+      instanceTypes: [],
+      minSize: 1,
+      maxSize: 10,
+      desiredSize: 2,
+      amiType: NodegroupAmiType.BOTTLEROCKET_X86_64,
+      subnets: props.vpc?.selectSubnets({
+        subnetType: SubnetType.PUBLIC,
+      }),
     });
 
     return cluster;
@@ -45,23 +87,35 @@ export class EksStack extends cdk.Stack {
       resolveConflicts: 'OVERWRITE',
     });
 
-    const vpcRole = new Role(this, `vpcCniRole-${this.cluster.clusterName}`, {
-      roleName: `vpcCniRole-${this.cluster.clusterName}`,
+    const trustRelationShipStatement = new PolicyStatement({
+      effect: Effect.ALLOW,
+      principals: [new ServicePrincipal('pods.eks.amazonaws.com')],
+      actions: ['sts:AssumeRole', 'sts:TagSession'],
+    });
+
+    const vpcRole = new Role(this, 'vpcCniRole', {
+      roleName: `vpcCniRole-${cluster.clusterName}`,
       assumedBy: new ServicePrincipal('pods.eks.amazonaws.com'),
       managedPolicies: [
         ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_CNI_Policy'),
         ManagedPolicy.fromAwsManagedPolicyName('AmazonEKSClusterPolicy'),
       ],
     });
+    vpcRole.assumeRolePolicy?.addStatements(trustRelationShipStatement);
 
     const vpcAddon = new CfnAddon(this, 'VPCCNIAddon', {
       addonName: 'vpc-cni',
       clusterName: cluster.clusterName,
-      serviceAccountRoleArn: vpcRole.roleArn,
       resolveConflicts: 'OVERWRITE',
+      podIdentityAssociations: [
+        {
+          roleArn: vpcRole.roleArn,
+          serviceAccount: 'aws-node',
+        },
+      ],
     });
 
-    const efsCsiRole = new Role(this, `efiCsiRole-${this.cluster.clusterName}`, {
+    const efsCsiRole = new Role(this, 'efiCsiRole', {
       roleName: `efsCsiRole-${this.cluster.clusterName}`,
       assumedBy: new ServicePrincipal('pods.eks.amazonaws.com'),
       managedPolicies: [
@@ -69,11 +123,19 @@ export class EksStack extends cdk.Stack {
         ManagedPolicy.fromAwsManagedPolicyName('AmazonEKSClusterPolicy'),
       ],
     });
+
+    efsCsiRole.assumeRolePolicy?.addStatements(trustRelationShipStatement);
+
     const efsCsiAddon = new CfnAddon(this, 'EFSCSIAddon', {
       addonName: 'aws-efs-csi-driver',
       clusterName: cluster.clusterName,
-      serviceAccountRoleArn: efsCsiRole.roleArn,
       resolveConflicts: 'OVERWRITE',
+      podIdentityAssociations: [
+        {
+          roleArn: efsCsiRole.roleArn,
+          serviceAccount: 'efs-csi-controller-sa',
+        },
+      ],
     });
 
     const eksPodAgentAddon = new CfnAddon(this, 'EKSPodAgentAddon', {
