@@ -10,6 +10,7 @@ import {
   EndpointAccess,
   KubernetesVersion,
   NodegroupAmiType,
+  TaintEffect,
 } from 'aws-cdk-lib/aws-eks';
 import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
 import { IVpc, SubnetType } from 'aws-cdk-lib/aws-ec2';
@@ -71,6 +72,14 @@ export class EksStack extends cdk.Stack {
       subnets: props.vpc?.selectSubnets({
         subnetType: SubnetType.PUBLIC,
       }),
+      // This taint allows to run addons and karpenter running on the control plane nodes
+      taints: [
+        {
+          effect: TaintEffect.NO_SCHEDULE,
+          key: 'CriticalAddonsOnly',
+          value: 'true',
+        },
+      ],
     });
 
     // TODO: Change to new role
