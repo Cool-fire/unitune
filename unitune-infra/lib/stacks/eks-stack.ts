@@ -1,5 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import {
+  AccessPolicy,
+  AccessScopeType,
   Addon,
   AuthenticationMode,
   CfnAddon,
@@ -70,6 +72,13 @@ export class EksStack extends cdk.Stack {
         subnetType: SubnetType.PUBLIC,
       }),
     });
+
+    // TODO: Change to new role
+    cluster.grantAccess('clusterAdminAccess', `arn:aws:iam::${props.env?.account}:role/IibsAdminAccess-DO-NOT-DELETE`, [
+      AccessPolicy.fromAccessPolicyName('AmazonEKSClusterAdminPolicy', {
+        accessScopeType: AccessScopeType.CLUSTER,
+      }),
+    ]);
 
     return cluster;
   }
