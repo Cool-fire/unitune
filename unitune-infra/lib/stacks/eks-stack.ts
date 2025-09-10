@@ -61,6 +61,9 @@ export class EksStack extends cdk.Stack {
         ClusterLoggingTypes.CONTROLLER_MANAGER,
         ClusterLoggingTypes.SCHEDULER,
       ],
+      tags: {
+        'karpenter.sh/discovery': clusterName
+      }
     });
 
     cluster.addNodegroupCapacity('default-node-group', {

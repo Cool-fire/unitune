@@ -7,6 +7,8 @@ import { Queue, QueuePolicy } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs/lib/construct';
 import { create } from 'domain';
 
+const KARPENTER_VERISON = '1.6.3'
+
 export interface KarpenterProps {
   readonly Cluster: Cluster;
   readonly namespace?: string;
@@ -57,6 +59,29 @@ export class Karpenter extends Construct {
     this.addEventBridgeRules(this.interruptionQueue);
     const karpenterControllerPolicy = this.createKarpenterControllerPolicy();
     karpenterControllerPolicy.attachToRole(this.serviceAccount.role);
+
+    this.cluster.addHelmChart('Karpeneter-chart', {
+      chart: 'Karpenter',
+      repository: 'oci://public.ecr.aws/karpenter/karpenter',
+      namespace: this.namespace,
+      wait: true,
+      createNamespace: false,
+      version: KARPENTER_VERISON,
+      values: {
+        settings: {
+          clusterName: this.cluster.clusterName,
+          clusterEndpoint: this.cluster.clusterEndpoint,
+          interruptionQueue: this.interruptionQueue?.queueName,
+        },
+        serviceAccount: {
+          create: false,
+          name: this.serviceAccount.serviceAccountName,
+          annotations: {
+            'eks.amazonaws.com/role-arn': this.serviceAccount.role.roleArn,
+          },
+        }
+      },
+    });
   }
 
   private addEventBridgeRules(interruptionQueue: Queue) {
