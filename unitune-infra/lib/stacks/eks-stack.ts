@@ -32,22 +32,23 @@ export interface EksStackProps extends cdk.StackProps {
 
 export class EksStack extends cdk.Stack {
   public cluster: Cluster;
+  private clusterName: string;
 
   constructor(scope: Construct, id: string, props: EksStackProps) {
     super(scope, id, props);
     this.cluster = this.createCluster(props);
     this.installEksAddons(this.cluster);
 
-    const karpenter = new Karpenter(this, 'Karpenter', { cluster: this.cluster });
+    const karpenter = new Karpenter(this, 'Karpenter', { clusterName: this.clusterName, cluster: this.cluster });
   }
 
   private createCluster(props: EksStackProps): Cluster {
-    const clusterName = props.clusterName ? `unitune-${props.clusterName}` : `unitune-cluster`;
+    this.clusterName = props.clusterName ? `unitune-${props.clusterName}` : `unitune-cluster`;
 
-    const cluster = new Cluster(this, clusterName, {
-      clusterName: clusterName,
+    const cluster = new Cluster(this, this.clusterName, {
+      clusterName: this.clusterName,
       version: KubernetesVersion.V1_31,
-      kubectlLayer: new KubectlV31Layer(this, `${clusterName}-kubectl-layer`),
+      kubectlLayer: new KubectlV31Layer(this, `${this.clusterName}-kubectl-layer`),
       vpc: props.vpc,
       vpcSubnets: [
         {
@@ -65,7 +66,7 @@ export class EksStack extends cdk.Stack {
         ClusterLoggingTypes.SCHEDULER,
       ],
       tags: {
-        'karpenter.sh/discovery': clusterName,
+        'karpenter.sh/discovery': this.clusterName,
       },
     });
 

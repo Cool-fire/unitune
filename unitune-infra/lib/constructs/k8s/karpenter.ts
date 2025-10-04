@@ -11,6 +11,7 @@ import path from 'path';
 const KARPENTER_VERISON = '1.6.3';
 
 export interface KarpenterProps {
+  readonly clusterName: string;
   readonly cluster: Cluster;
   readonly namespace?: string;
   readonly serviceAccountName?: string;
@@ -24,6 +25,7 @@ export class Karpenter extends Construct {
   private readonly cluster: Cluster;
   private readonly interruptionQueue: Queue;
   private readonly serviceAccount: ServiceAccount;
+  private readonly clusterName: string;
 
   constructor(scope: Construct, id: string, props: KarpenterProps) {
     super(scope, id);
@@ -31,6 +33,7 @@ export class Karpenter extends Construct {
     this.serviceAccountName = props.serviceAccountName ?? 'karpenter';
     this.namespace = props.namespace ?? 'kube-system';
     this.cluster = props.cluster;
+    this.clusterName = props.clusterName;
 
     /**
      * Bootstrap the cluster to Enable Karpenter to create and manage nodes.
@@ -39,21 +42,21 @@ export class Karpenter extends Construct {
      * @link https://karpenter.sh/v0.32/reference/cloudformation/
      */
 
-    this.nodeRole = props.nodeRole ?? this.createNodeRole(props.cluster.clusterName);
+    this.nodeRole = props.nodeRole ?? this.createNodeRole(props.clusterName);
 
     this.cluster.awsAuth.addRoleMapping(this.nodeRole, {
       username: `system:node:{{EC2PrivateDNSName}}`,
       groups: ['system:bootstrappers', 'system:nodes'],
     });
 
-    this.serviceAccount = this.cluster.addServiceAccount(`${this.cluster.clusterName}-ServiceAccount`, {
+    this.serviceAccount = this.cluster.addServiceAccount(`${this.clusterName}-ServiceAccount`, {
       namespace: this.namespace,
       name: this.serviceAccountName,
       identityType: IdentityType.POD_IDENTITY,
     });
 
-    this.interruptionQueue = new Queue(this, `${this.cluster.clusterName}-KarpenterInterruptionQueue`, {
-      queueName: `${this.cluster.clusterName}`,
+    this.interruptionQueue = new Queue(this, `${this.clusterName}-KarpenterInterruptionQueue`, {
+      queueName: `${this.clusterName}`,
       retentionPeriod: Duration.minutes(300), // 5 hours
     });
 
@@ -70,7 +73,7 @@ export class Karpenter extends Construct {
       version: KARPENTER_VERISON,
       values: {
         settings: {
-          clusterName: this.cluster.clusterName,
+          clusterName: this.clusterName,
           clusterEndpoint: this.cluster.clusterEndpoint,
           interruptionQueue: this.interruptionQueue?.queueName,
         },
@@ -93,7 +96,7 @@ export class Karpenter extends Construct {
       namespace: this.namespace,
       wait: true,
       values: {
-        clusterName: this.cluster.clusterName,
+        clusterName: this.clusterName,
         nodeRoleName: this.nodeRole.roleName,
       },
     });
@@ -133,7 +136,7 @@ export class Karpenter extends Construct {
   }
 
   private createKarpenterControllerPolicy(): ManagedPolicy {
-    const policyName = `KarpenterControllerPolicy-${this.cluster.clusterName}`;
+    const policyName = `KarpenterControllerPolicy-${this.clusterName}`;
 
     const allowScopedEC2InstanceActions = new PolicyStatement({
       actions: ['ec2:CreateFleet', 'ec2:RunInstances'],
@@ -158,8 +161,8 @@ export class Karpenter extends Construct {
       ],
       conditions: {
         StringEquals: {
-          [`aws:RequestTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
-          'aws:RequestTag/eks:eks-cluster-name': `${this.cluster.clusterName}`,
+          [`aws:RequestTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
+          'aws:RequestTag/eks:eks-cluster-name': `${this.clusterName}`,
         },
         StringLike: {
           'aws:RequestTag/karpenter.sh/nodepool': '*',
@@ -178,8 +181,8 @@ export class Karpenter extends Construct {
       ],
       conditions: {
         StringEquals: {
-          [`aws:RequestTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
-          'aws:RequestTag/eks:eks-cluster-name': `${this.cluster.clusterName}`,
+          [`aws:RequestTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
+          'aws:RequestTag/eks:eks-cluster-name': `${this.clusterName}`,
           'ec2:CreateAction': ['RunInstances', 'CreateFleet', 'CreateLaunchTemplate'],
         },
         StringLike: {
@@ -194,7 +197,7 @@ export class Karpenter extends Construct {
       actions: ['ec2:CreateTags'],
       conditions: {
         StringEquals: {
-          [`aws:ResourceTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
+          [`aws:ResourceTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
         },
         StringLike: {
           'aws:ResourceTag/karpenter.sh/nodepool': '*',
@@ -214,7 +217,7 @@ export class Karpenter extends Construct {
       actions: ['ec2:TerminateInstances', 'ec2:DeleteLaunchTemplate'],
       conditions: {
         StringEquals: {
-          [`aws:ResourceTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
+          [`aws:ResourceTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
         },
         StringLike: {
           'aws:ResourceTag/karpenter.sh/nodepool': '*',
@@ -257,7 +260,7 @@ export class Karpenter extends Construct {
 
     const allowPassingInstanceRole = new PolicyStatement({
       sid: 'AllowPassingInstanceRole',
-      resources: [`arn:${Aws.PARTITION}:iam::${Aws.ACCOUNT_ID}:role/KarpenterNodeRole-${this.cluster.clusterName}`],
+      resources: [`arn:${Aws.PARTITION}:iam::${Aws.ACCOUNT_ID}:role/KarpenterNodeRole-${this.clusterName}`],
       actions: ['iam:PassRole'],
       conditions: {
         StringEquals: {
@@ -272,7 +275,7 @@ export class Karpenter extends Construct {
       actions: ['iam:CreateInstanceProfile'],
       conditions: {
         StringEquals: {
-          [`aws:RequestTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
+          [`aws:RequestTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
           'aws:RequestTag/topology.kubernetes.io/region': Aws.REGION,
         },
         StringLike: {
@@ -287,9 +290,9 @@ export class Karpenter extends Construct {
       actions: ['iam:TagInstanceProfile'],
       conditions: {
         StringEquals: {
-          [`aws:ResourceTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
+          [`aws:ResourceTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
           'aws:ResourceTag/topology.kubernetes.io/region': Aws.REGION,
-          [`aws:RequestTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
+          [`aws:RequestTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
           'aws:RequestTag/topology.kubernetes.io/region': Aws.REGION,
         },
         StringLike: {
@@ -305,7 +308,7 @@ export class Karpenter extends Construct {
       actions: ['iam:AddRoleToInstanceProfile', 'iam:RemoveRoleFromInstanceProfile', 'iam:DeleteInstanceProfile'],
       conditions: {
         StringEquals: {
-          [`aws:ResourceTag/kubernetes.io/cluster/${this.cluster.clusterName}`]: 'owned',
+          [`aws:ResourceTag/kubernetes.io/cluster/${this.clusterName}`]: 'owned',
           'aws:ResourceTag/topology.kubernetes.io/region': Aws.REGION,
         },
         StringLike: {
@@ -322,7 +325,7 @@ export class Karpenter extends Construct {
 
     const allowAPIServerEndpointDiscovery = new PolicyStatement({
       sid: 'AllowAPIServerEndpointDiscovery',
-      resources: [`arn:${Aws.PARTITION}:eks:${Aws.REGION}:${Aws.ACCOUNT_ID}:cluster/${this.cluster.clusterName}`],
+      resources: [`arn:${Aws.PARTITION}:eks:${Aws.REGION}:${Aws.ACCOUNT_ID}:cluster/${this.clusterName}`],
       actions: ['eks:DescribeCluster'],
     });
 
@@ -353,7 +356,7 @@ export class Karpenter extends Construct {
       controllerPolicies.push(allowSQSReadActions);
     }
 
-    return new ManagedPolicy(this, `${this.cluster.clusterName}-KarpenterControllerPolicy`, {
+    return new ManagedPolicy(this, `${this.clusterName}-KarpenterControllerPolicy`, {
       managedPolicyName: policyName,
       statements: controllerPolicies,
     });
