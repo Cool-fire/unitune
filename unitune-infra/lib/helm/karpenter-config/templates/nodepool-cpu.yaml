@@ -1,0 +1,84 @@
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: default
+spec:
+  amiFamily: Bottlerocket
+  role: { { .Values.nodeRoleName } }
+  amiSelectorTerms:
+    - alias: bottlerocket@latest
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: { { .Values.clusterName } }
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: { { .Values.clusterName } }
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeType: gp3
+        volumeSize: 200Gi
+        deleteOnTermination: true
+    - deviceName: /dev/xvdb
+      ebs:
+        volumeType: gp3
+        volumeSize: 500Gi
+        deleteOnTermination: true
+    - deviceName: /dev/xvdc
+      ebs:
+        volumeType: gp3
+        volumeSize: 2000Gi
+        deleteOnTermination: true
+---
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: default
+spec:
+  disruption:
+    consolidateAfter: 30s
+    consolidationPolicy: WhenEmpty
+    expireAfter: Never
+  limits:
+    cpu: '200'
+  template:
+    spec:
+      terminationGracePeriod: 5m
+      requirements:
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values:
+            [
+              'c4',
+              'c5',
+              'm5',
+              'r3',
+              'r4',
+              'r5',
+              'inf1',
+              'inf2',
+              'trn1',
+              'g4dn',
+              'g5',
+              'g5g',
+              'g6',
+              'g6e',
+              't3',
+              'm4',
+              'm5',
+              'p2',
+              'p3',
+              'p3dn',
+              'p4d',
+              'p5',
+            ]
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ['on-demand']
+        - key: kubernetes.io/os
+          operator: In
+          values: ['linux']
+      nodeClassRef:
+        name: default
+        kind: EC2NodeClass
+        group: karpenter.k8s.aws

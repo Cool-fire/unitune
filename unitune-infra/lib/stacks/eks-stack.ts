@@ -23,6 +23,7 @@ import {
   Role,
   ServicePrincipal,
 } from 'aws-cdk-lib/aws-iam';
+import { Karpenter } from '../constructs/k8s/karpenter';
 
 export interface EksStackProps extends cdk.StackProps {
   clusterName?: string;
@@ -36,6 +37,8 @@ export class EksStack extends cdk.Stack {
     super(scope, id, props);
     this.cluster = this.createCluster(props);
     this.installEksAddons(this.cluster);
+
+    const karpenter = new Karpenter(this, 'Karpenter', { cluster: this.cluster });
   }
 
   private createCluster(props: EksStackProps): Cluster {
@@ -62,8 +65,8 @@ export class EksStack extends cdk.Stack {
         ClusterLoggingTypes.SCHEDULER,
       ],
       tags: {
-        'karpenter.sh/discovery': clusterName
-      }
+        'karpenter.sh/discovery': clusterName,
+      },
     });
 
     cluster.addNodegroupCapacity('default-node-group', {

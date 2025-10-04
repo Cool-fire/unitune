@@ -3,14 +3,15 @@ import { Cluster, IdentityType, ServiceAccount } from 'aws-cdk-lib/aws-eks';
 import { Rule } from 'aws-cdk-lib/aws-events';
 import { SqsQueue } from 'aws-cdk-lib/aws-events-targets';
 import { ManagedPolicy, Policy, PolicyStatement, Role, ServicePrincipal } from 'aws-cdk-lib/aws-iam';
+import { Asset } from 'aws-cdk-lib/aws-s3-assets';
 import { Queue, QueuePolicy } from 'aws-cdk-lib/aws-sqs';
 import { Construct } from 'constructs/lib/construct';
-import { create } from 'domain';
+import path from 'path';
 
-const KARPENTER_VERISON = '1.6.3'
+const KARPENTER_VERISON = '1.6.3';
 
 export interface KarpenterProps {
-  readonly Cluster: Cluster;
+  readonly cluster: Cluster;
   readonly namespace?: string;
   readonly serviceAccountName?: string;
   readonly nodeRole?: Role;
@@ -29,7 +30,7 @@ export class Karpenter extends Construct {
 
     this.serviceAccountName = props.serviceAccountName ?? 'karpenter';
     this.namespace = props.namespace ?? 'kube-system';
-    this.cluster = props.Cluster;
+    this.cluster = props.cluster;
 
     /**
      * Bootstrap the cluster to Enable Karpenter to create and manage nodes.
@@ -38,7 +39,7 @@ export class Karpenter extends Construct {
      * @link https://karpenter.sh/v0.32/reference/cloudformation/
      */
 
-    this.nodeRole = props.nodeRole ?? this.createNodeRole(props.Cluster.clusterName);
+    this.nodeRole = props.nodeRole ?? this.createNodeRole(props.cluster.clusterName);
 
     this.cluster.awsAuth.addRoleMapping(this.nodeRole, {
       username: `system:node:{{EC2PrivateDNSName}}`,
@@ -79,7 +80,21 @@ export class Karpenter extends Construct {
           annotations: {
             'eks.amazonaws.com/role-arn': this.serviceAccount.role.roleArn,
           },
-        }
+        },
+      },
+    });
+
+    const karpenterConfigAsset = new Asset(this, 'KarpenterConfigAsset', {
+      path: path.join(__dirname, '../../helm/karpenter-config'),
+    });
+
+    this.cluster.addHelmChart('KarpenterConfig-chart', {
+      chartAsset: karpenterConfigAsset,
+      namespace: this.namespace,
+      wait: true,
+      values: {
+        clusterName: this.cluster.clusterName,
+        nodeRoleName: this.nodeRole.roleName,
       },
     });
   }
