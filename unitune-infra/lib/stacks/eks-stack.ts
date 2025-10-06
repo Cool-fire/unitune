@@ -163,10 +163,10 @@ export class EksStack extends cdk.Stack {
       ],
     });
 
-    const eksPodAgentAddon = new CfnAddon(this, 'EKSPodAgentAddon', {
-      addonName: 'eks-pod-identity-agent',
-      clusterName: cluster.clusterName,
-      resolveConflicts: 'OVERWRITE',
-    });
+    // const eksPodAgentAddon = new CfnAddon(this, 'EKSPodAgentAddon', {
+    //   addonName: 'eks-pod-identity-agent',
+    //   clusterName: cluster.clusterName,
+    //   resolveConflicts: 'OVERWRITE',
+    // });
   }
 }

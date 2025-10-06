@@ -4,15 +4,15 @@ metadata:
   name: default
 spec:
   amiFamily: Bottlerocket
-  role: { { .Values.nodeRoleName } }
+  role: {{ .Values.nodeRoleName }}
   amiSelectorTerms:
     - alias: bottlerocket@latest
   subnetSelectorTerms:
     - tags:
-        karpenter.sh/discovery: { { .Values.clusterName } }
+        karpenter.sh/discovery: {{ .Values.clusterName }}
   securityGroupSelectorTerms:
     - tags:
-        karpenter.sh/discovery: { { .Values.clusterName } }
+        karpenter.sh/discovery: {{ .Values.clusterName }}
   blockDeviceMappings:
     - deviceName: /dev/xvda
       ebs:
