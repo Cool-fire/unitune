@@ -13,7 +13,7 @@ import {
   TaintEffect,
 } from 'aws-cdk-lib/aws-eks';
 import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
-import { IVpc, SubnetType } from 'aws-cdk-lib/aws-ec2';
+import { IVpc, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs/lib/construct';
 import {
   Effect,
@@ -24,6 +24,7 @@ import {
   ServicePrincipal,
 } from 'aws-cdk-lib/aws-iam';
 import { Karpenter } from '../constructs/k8s/karpenter';
+import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
 
 export interface EksStackProps extends cdk.StackProps {
   clusterName?: string;
@@ -68,6 +69,34 @@ export class EksStack extends cdk.Stack {
       tags: {
         'karpenter.sh/discovery': this.clusterName,
       },
+    });
+
+    // Add a custom resource to tag the security group id's
+    new AwsCustomResource(this, 'TagClusterSecurityGroupForKarpenter', {
+      onCreate: {
+        service: 'EC2',
+        action: 'createTags',
+        parameters: {
+          Resources: [cluster.clusterSecurityGroupId],
+          Tags: [{ Key: 'karpenter.sh/discovery', Value: this.clusterName }],
+        },
+        physicalResourceId: PhysicalResourceId.of(`${this.clusterName}-cluster-sg-tag`),
+      },
+      policy: AwsCustomResourcePolicy.fromStatements([
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: ['ec2:CreateTags'],
+          resources: ['*'],
+        }),
+      ]),
+    });
+
+    // Tag VPC subnets for Karpenter discovery
+    props.vpc?.publicSubnets.forEach((subnet, index) => {
+      cdk.Tags.of(subnet).add('karpenter.sh/discovery', this.clusterName);
+    });
+    props.vpc?.privateSubnets.forEach((subnet, index) => {
+      cdk.Tags.of(subnet).add('karpenter.sh/discovery', this.clusterName);
     });
 
     cluster.addNodegroupCapacity('default-node-group', {

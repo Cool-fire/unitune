@@ -19,16 +19,6 @@ spec:
         volumeType: gp3
         volumeSize: 200Gi
         deleteOnTermination: true
-    - deviceName: /dev/xvdb
-      ebs:
-        volumeType: gp3
-        volumeSize: 500Gi
-        deleteOnTermination: true
-    - deviceName: /dev/xvdc
-      ebs:
-        volumeType: gp3
-        volumeSize: 2000Gi
-        deleteOnTermination: true
 ---
 apiVersion: karpenter.sh/v1
 kind: NodePool
@@ -36,7 +26,7 @@ metadata:
   name: default
 spec:
   disruption:
-    consolidateAfter: 30s
+    consolidateAfter: 60s
     consolidationPolicy: WhenEmpty
     expireAfter: Never
   limits:

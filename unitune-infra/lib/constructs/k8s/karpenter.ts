@@ -260,7 +260,7 @@ export class Karpenter extends Construct {
 
     const allowPassingInstanceRole = new PolicyStatement({
       sid: 'AllowPassingInstanceRole',
-      resources: [`arn:${Aws.PARTITION}:iam::${Aws.ACCOUNT_ID}:role/KarpenterNodeRole-${this.clusterName}`],
+      resources: [this.nodeRole.roleArn],
       actions: ['iam:PassRole'],
       conditions: {
         StringEquals: {
@@ -363,7 +363,8 @@ export class Karpenter extends Construct {
   }
 
   private createNodeRole(clusterName: string): Role {
-    return new Role(this, `${clusterName}-KarpenterNodeRole`, {
+    return new Role(this, 'KarpenterNodeRole', {
+      roleName: `KarpenterNodeRole-${clusterName}`,
       assumedBy: new ServicePrincipal('ec2.amazonaws.com'),
       managedPolicies: [
         ManagedPolicy.fromAwsManagedPolicyName('AmazonEKS_CNI_Policy'),
