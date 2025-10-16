@@ -8,7 +8,7 @@ import (
 func NewCommand() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "unitune",
-		Short: "A lightweight tool for deploying and managing infrastructure for finetuning models on Kubernetes",
+		Short: "A lightweight tool for deploying and managing Machine learning infrastructure on K8s",
 	}
 
 	c.AddCommand(
