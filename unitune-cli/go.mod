@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/iam v1.38.2
 	github.com/aws/aws-sdk-go-v2/service/sts v1.38.6
 	github.com/charmbracelet/huh v0.8.0
+	github.com/charmbracelet/huh/spinner v0.0.0-20251005153135-a01a1e304532
 	github.com/spf13/cobra v1.10.1
 	github.com/spf13/pflag v1.0.10
 )

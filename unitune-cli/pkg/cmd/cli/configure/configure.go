@@ -1,10 +1,13 @@
 package configure
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/Cool-fire/unitune/pkg/aws"
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/huh/spinner"
+
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -32,18 +35,43 @@ func (o *ConfigureOptions) Run(c *cobra.Command, args []string) error {
 		return fmt.Errorf("Configuration requires consent...")
 	}
 
-	validatePermissions()
+	validatePermissionSpinner := spinner.New().Title("Validating Permissions...").ActionWithErr(func(ctx context.Context) error {
+		return validatePermissions()
+	})
+
+	if err := validatePermissionSpinner.Run(); err != nil {
+		fmt.Printf("Failed to validate permissions: %v", err)
+	}
 
 	return nil
 }
 
-func validatePermissions() (bool, error) {
-	_, err := aws.GetAwsConfig()
+func validatePermissions() error {
+	cfg, err := aws.GetAwsConfig()
 	if err != nil {
-		return false, err
+		return fmt.Errorf("failed to get AWS config: %v", err)
 	}
 
-	return true, nil
+	sourceArn, err := aws.GetPolicySourceArn(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to get policy source ARN: %v", err)
+	}
+
+	hasSimulatePermission, err := aws.HasSimulatePrincipalPolicyPermission(cfg, sourceArn)
+	if err != nil {
+		return fmt.Errorf("failed to check simulate permission: %v", err)
+	}
+	if !hasSimulatePermission {
+		return fmt.Errorf("missing iam:SimulatePrincipalPolicy permission")
+	}
+
+	if err := aws.CheckRequiredPermissions(cfg); err != nil {
+		return fmt.Errorf("permission validation failed: %v", err)
+	}
+
+	fmt.Printf("Testing succeded")
+
+	return nil
 }
 
 func NewCommand() *cobra.Command {
