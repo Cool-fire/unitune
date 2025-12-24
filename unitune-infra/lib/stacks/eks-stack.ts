@@ -118,8 +118,14 @@ export class EksStack extends cdk.Stack {
       ],
     });
 
-    // TODO: Change to new role
-    cluster.grantAccess('clusterAdminAccess', `arn:aws:iam::${props.env?.account}:role/IibsAdminAccess-DO-NOT-DELETE`, [
+    // Create a dedicated role for cluster admin access
+    const clusterAdminRole = new Role(this, 'ClusterAdminRole', {
+      roleName: `${this.clusterName}-admin`,
+      assumedBy: new cdk.aws_iam.AccountPrincipal(this.account),
+    });
+
+    // Grant the role cluster admin access via Access Entry
+    cluster.grantAccess('clusterAdminAccess', clusterAdminRole.roleArn, [
       AccessPolicy.fromAccessPolicyName('AmazonEKSClusterAdminPolicy', {
         accessScopeType: AccessScopeType.CLUSTER,
       }),
