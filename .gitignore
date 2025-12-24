@@ -1,3 +1,18 @@
 .DS_Store
 .idea/
 *.iml
+
+# Build artifacts
+bin/
+dist/
+
+# Embedded infra (generated at build time)
+unitune-cli/pkg/infra/embedded/*
+!unitune-cli/pkg/infra/embedded/.gitkeep
+
+# CDK artifacts
+unitune-infra/cdk.out/
+unitune-infra/node_modules/
+
+# Go
+unitune-cli/unitune
