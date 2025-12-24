@@ -90,15 +90,8 @@ func extractToDir(targetDir string) error {
 	return nil
 }
 
-// EnsureDependenciesInstalled runs npm install only if node_modules doesn't exist
 func EnsureDependenciesInstalled(dir string) error {
-	nodeModulesPath := filepath.Join(dir, "node_modules")
-	if _, err := os.Stat(nodeModulesPath); err == nil {
-		// node_modules exists, skip install
-		return nil
-	}
-
-	fmt.Println("📦 Installing dependencies (first time only)...")
+	fmt.Println("📦 Installing dependencies...")
 	cmd := exec.Command("npm", "install", "--prefer-offline", "--no-audit")
 	cmd.Dir = dir
 	cmd.Stdout = os.Stdout
