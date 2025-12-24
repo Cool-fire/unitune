@@ -2,16 +2,31 @@ package aws
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
+
+//go:embed permissions/permissions.json
+var permissionsJSON []byte
+
+type Permission struct {
+	Sid      string   `json:"Sid"`
+	Effect   string   `json:"Effect"`
+	Action   []string `json:"Action"`
+	Resource string   `json:"Resource"`
+}
+
+type PermissionsConfig struct {
+	Version   string       `json:"Version"`
+	Statement []Permission `json:"Statement"`
+}
 
 func GetPolicySourceArn(cfg aws.Config) (string, error) {
 	stsClient := sts.NewFromConfig(cfg)
@@ -54,26 +69,9 @@ func HasSimulatePrincipalPolicyPermission(cfg aws.Config, sourceArn string) (boo
 	return err == nil, err
 }
 
-type Permission struct {
-	Sid      string   `json:"Sid"`
-	Effect   string   `json:"Effect"`
-	Action   []string `json:"Action"`
-	Resource string   `json:"Resource"`
-}
-
-type PermissionsConfig struct {
-	Version   string       `json:"Version"`
-	Statement []Permission `json:"Statement"`
-}
-
 func CheckRequiredPermissions(cfg aws.Config) error {
-	data, err := os.ReadFile("permissions/permissions.json")
-	if err != nil {
-		return fmt.Errorf("failed to read permissions.json: %v", err)
-	}
-
 	var permConfig PermissionsConfig
-	if err := json.Unmarshal(data, &permConfig); err != nil {
+	if err := json.Unmarshal(permissionsJSON, &permConfig); err != nil {
 		return fmt.Errorf("failed to parse permissions.json: %v", err)
 	}
 
