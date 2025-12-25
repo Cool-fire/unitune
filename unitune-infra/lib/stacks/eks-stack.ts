@@ -13,9 +13,10 @@ import {
   TaintEffect,
 } from 'aws-cdk-lib/aws-eks';
 import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
-import { IVpc, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2';
+import { InstanceType, IVpc, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs/lib/construct';
 import {
+  ArnPrincipal,
   Effect,
   ManagedPolicy,
   OpenIdConnectPrincipal,
@@ -100,7 +101,7 @@ export class EksStack extends cdk.Stack {
     });
 
     cluster.addNodegroupCapacity('default-node-group', {
-      instanceTypes: [],
+      instanceTypes: [new InstanceType('m5.large')],
       minSize: 1,
       maxSize: 10,
       desiredSize: 2,
@@ -121,7 +122,7 @@ export class EksStack extends cdk.Stack {
     // Create a dedicated role for cluster admin access
     const clusterAdminRole = new Role(this, 'ClusterAdminRole', {
       roleName: `${this.clusterName}-admin`,
-      assumedBy: new cdk.aws_iam.AccountPrincipal(this.account),
+      assumedBy: new ArnPrincipal(`arn:aws:iam::${this.account}:user/unitune`),
     });
 
     // Grant the role cluster admin access via Access Entry
