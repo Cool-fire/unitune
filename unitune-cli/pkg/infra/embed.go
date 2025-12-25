@@ -22,21 +22,14 @@ func GetInfraDir() (string, error) {
 }
 
 // EnsureInfraExtracted ensures the CDK infrastructure is extracted to ~/.unitune/infra/
-// Returns the path to the infra directory. Only extracts if not already present.
+// Returns the path to the infra directory. Always re-extracts to ensure the latest version.
 func EnsureInfraExtracted() (string, error) {
 	infraDir, err := GetInfraDir()
 	if err != nil {
 		return "", err
 	}
 
-	// Check if already extracted by looking for package.json
-	packageJsonPath := filepath.Join(infraDir, "package.json")
-	if _, err := os.Stat(packageJsonPath); err == nil {
-		// Already extracted
-		return infraDir, nil
-	}
-
-	// Extract embedded infrastructure
+	// Always extract to ensure we have the latest embedded infrastructure
 	if err := extractToDir(infraDir); err != nil {
 		return "", err
 	}
@@ -107,12 +100,6 @@ func RunCDK(dir string, args ...string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
-
-	// Pass through AWS credentials
-	cmd.Env = append(os.Environ(),
-		"CDK_DEFAULT_ACCOUNT="+os.Getenv("CDK_DEFAULT_ACCOUNT"),
-		"CDK_DEFAULT_REGION="+os.Getenv("CDK_DEFAULT_REGION"),
-	)
 
 	return cmd.Run()
 }
