@@ -21,6 +21,24 @@ func GetInfraDir() (string, error) {
 	return filepath.Join(homeDir, ".unitune", "infra"), nil
 }
 
+// IsInfraExtracted checks if the infrastructure is already extracted
+func IsInfraExtracted() (bool, string, error) {
+	infraDir, err := GetInfraDir()
+	if err != nil {
+		return false, "", err
+	}
+
+	// Check if cdk.json exists as a marker that extraction was successful
+	cdkJson := filepath.Join(infraDir, "cdk.json")
+	if _, err := os.Stat(cdkJson); os.IsNotExist(err) {
+		return false, infraDir, nil
+	} else if err != nil {
+		return false, infraDir, err
+	}
+
+	return true, infraDir, nil
+}
+
 // EnsureInfraExtracted ensures the CDK infrastructure is extracted to ~/.unitune/infra/
 // Returns the path to the infra directory. Always re-extracts to ensure the latest version.
 func EnsureInfraExtracted() (string, error) {
