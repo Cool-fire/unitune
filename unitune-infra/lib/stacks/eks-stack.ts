@@ -42,9 +42,8 @@ export class EksStack extends cdk.Stack {
     this.cluster = this.createCluster(props);
     this.installEksAddons(this.cluster);
 
-    // Create cleanup resource FIRST - this will run before Karpenter resources are deleted
+    // Create cleanup resource - this will run before Karpenter resources are deleted
     const karpenterCleanup = new KarpenterCleanup(this, 'KarpenterCleanup', {
-      cluster: this.cluster,
       clusterName: this.clusterName,
     });
 
@@ -59,7 +58,7 @@ export class EksStack extends cdk.Stack {
     // 1. Cleanup custom resource is deleted first (triggering the delete handler)
     // 2. Cleanup Lambda runs and removes Karpenter resources
     // 3. Then Karpenter resources can be safely deleted
-    karpenterCleanup.customResource.node.addDependency(karpenter.node);
+    karpenterCleanup.customResource.node.addDependency(karpenter);
   }
 
   private createCluster(props: EksStackProps): Cluster {

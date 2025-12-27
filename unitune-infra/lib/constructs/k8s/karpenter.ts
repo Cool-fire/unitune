@@ -64,7 +64,8 @@ export class Karpenter extends Construct {
     const karpenterControllerPolicy = this.createKarpenterControllerPolicy();
     karpenterControllerPolicy.attachToRole(this.serviceAccount.role);
 
-    this.cluster.addHelmChart('Karpeneter-chart', {
+    // Install the main Karpenter chart first (provides CRDs and controller)
+    const karpenterChart = this.cluster.addHelmChart('Karpeneter-chart', {
       chart: 'Karpenter',
       repository: 'oci://public.ecr.aws/karpenter/karpenter',
       namespace: this.namespace,
@@ -91,7 +92,8 @@ export class Karpenter extends Construct {
       path: path.join(__dirname, '../../helm/karpenter-config'),
     });
 
-    this.cluster.addHelmChart('KarpenterConfig-chart', {
+    // Install the config chart (NodePool/EC2NodeClass) AFTER the main Karpenter chart
+    const karpenterConfigChart = this.cluster.addHelmChart('KarpenterConfig-chart', {
       chartAsset: karpenterConfigAsset,
       namespace: this.namespace,
       wait: true,
@@ -100,6 +102,9 @@ export class Karpenter extends Construct {
         nodeRoleName: this.nodeRole.roleName,
       },
     });
+
+    // Ensure CRDs are installed before NodePool/EC2NodeClass resources
+    karpenterConfigChart.node.addDependency(karpenterChart);
   }
 
   private addEventBridgeRules(interruptionQueue: Queue) {

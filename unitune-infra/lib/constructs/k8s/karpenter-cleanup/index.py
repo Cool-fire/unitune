@@ -1,5 +1,4 @@
 import boto3
-import subprocess
 import json
 import os
 import logging
@@ -34,13 +33,27 @@ def wait_for_karpenter_nodes_terminated(cluster_name, region, timeout=300):
             return True
         
         logger.info(f"Waiting for {instance_count} Karpenter instances to terminate...")
+        
+        # Terminate the instances directly since we're cleaning up
+        instance_ids = []
+        for reservation in response['Reservations']:
+            for instance in reservation['Instances']:
+                instance_ids.append(instance['InstanceId'])
+        
+        if instance_ids:
+            logger.info(f"Terminating instances: {instance_ids}")
+            try:
+                ec2.terminate_instances(InstanceIds=instance_ids)
+            except Exception as e:
+                logger.warning(f"Error terminating instances: {str(e)}")
+        
         time.sleep(15)
     
     logger.warning(f"Timeout waiting for Karpenter instances to terminate")
     return False
 
 
-def cleanup_instance_profiles(cluster_name, region, max_retries=3):
+def cleanup_instance_profiles(cluster_name, region, max_retries=5):
     """
     Clean up instance profiles created by Karpenter.
     Karpenter creates instance profiles with names like: KarpenterNodeRole-<cluster_name>_<id>
@@ -82,7 +95,7 @@ def cleanup_instance_profiles(cluster_name, region, max_retries=3):
                         if 'DeleteConflict' in error_msg or 'in use' in error_msg.lower():
                             if attempt < max_retries - 1:
                                 logger.info(f"Instance profile {profile_name} still in use, waiting... (attempt {attempt + 1}/{max_retries})")
-                                time.sleep(20)
+                                time.sleep(30)
                             else:
                                 logger.warning(f"Failed to delete instance profile {profile_name} after {max_retries} attempts: {error_msg}")
                         else:
@@ -98,6 +111,14 @@ def cleanup_instance_profiles(cluster_name, region, max_retries=3):
 def handler(event, context):
     """
     Custom resource handler to cleanup Karpenter resources before stack deletion.
+    
+    This Lambda cleans up:
+    1. Terminates any running Karpenter-managed EC2 instances
+    2. Waits for instances to terminate
+    3. Removes instance profiles from the KarpenterNodeRole
+    4. Deletes the instance profiles
+    
+    This allows CloudFormation to delete the KarpenterNodeRole IAM role.
     """
     request_type = event['RequestType']
     cluster_name = event['ResourceProperties']['ClusterName']
@@ -106,97 +127,24 @@ def handler(event, context):
     if not region:
         raise ValueError('Region must be provided via ResourceProperties or AWS_REGION environment variable')
     
-    logger.info(f"Request type: {request_type}, Cluster: {cluster_name}")
+    logger.info(f"Request type: {request_type}, Cluster: {cluster_name}, Region: {region}")
     
     # Only run cleanup on delete
     if request_type != 'Delete':
         return send_response(event, context, 'SUCCESS', {'Message': 'No cleanup needed'})
     
     try:
-        # kubectl is provided by the KubectlV31Layer at /opt/kubectl/kubectl
-        kubectl_path = '/opt/kubectl/kubectl'
-        
-        # Verify kubectl exists
-        if not os.path.exists(kubectl_path):
-            logger.error(f"kubectl not found at {kubectl_path}. Make sure KubectlV31Layer is attached.")
-            return send_response(event, context, 'FAILED', {'Error': f'kubectl not found at {kubectl_path}'})
-        
-        # Verify kubectl is executable
-        if not os.access(kubectl_path, os.X_OK):
-            logger.error(f"kubectl at {kubectl_path} is not executable")
-            return send_response(event, context, 'FAILED', {'Error': f'kubectl at {kubectl_path} is not executable'})
-        
-        logger.info(f"Using kubectl at: {kubectl_path}")
-        
-        # Verify kubectl works
-        version_result = subprocess.run(
-            [kubectl_path, 'version', '--client', '--short'],
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
-        if version_result.returncode == 0:
-            logger.info(f"kubectl version: {version_result.stdout.strip()}")
-        else:
-            logger.warning(f"kubectl version check failed: {version_result.stderr}")
-        
-        # Update kubeconfig
-        logger.info("Updating kubeconfig...")
-        kubeconfig_result = subprocess.run(
-            ['aws', 'eks', 'update-kubeconfig', '--name', cluster_name, '--region', region],
-            capture_output=True,
-            text=True,
-            timeout=60
-        )
-        if kubeconfig_result.returncode != 0:
-            logger.warning(f"Kubeconfig update warning: {kubeconfig_result.stderr}")
-            # Continue anyway, cluster might already be partially deleted
-        
-        # Step 1: Delete all NodePools (this triggers node draining and termination)
-        logger.info("Step 1: Deleting Karpenter NodePools...")
-        nodepool_result = subprocess.run(
-            [kubectl_path, 'delete', 'nodepools.karpenter.sh', '--all', '--ignore-not-found=true'],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        if nodepool_result.returncode != 0:
-            logger.warning(f"NodePool deletion warning: {nodepool_result.stderr}")
-        else:
-            logger.info(f"NodePool deletion output: {nodepool_result.stdout}")
-        
-        # Step 2: Delete all EC2NodeClasses (this triggers instance profile cleanup by Karpenter)
-        logger.info("Step 2: Deleting Karpenter EC2NodeClasses...")
-        nodeclass_result = subprocess.run(
-            [kubectl_path, 'delete', 'ec2nodeclasses.karpenter.k8s.aws', '--all', '--ignore-not-found=true'],
-            capture_output=True,
-            text=True,
-            timeout=300
-        )
-        if nodeclass_result.returncode != 0:
-            logger.warning(f"EC2NodeClass deletion warning: {nodeclass_result.stderr}")
-        else:
-            logger.info(f"EC2NodeClass deletion output: {nodeclass_result.stdout}")
-        
-        # Step 3: Wait for all Karpenter-managed EC2 instances to terminate
-        # This is critical - instance profiles can't be deleted while attached to running instances
-        logger.info("Step 3: Waiting for Karpenter-managed EC2 instances to terminate...")
+        # Step 1: Terminate any running Karpenter-managed EC2 instances and wait
+        logger.info("Step 1: Terminating and waiting for Karpenter-managed EC2 instances...")
         wait_for_karpenter_nodes_terminated(cluster_name, region, timeout=300)
         
-        # Step 4: Explicitly clean up instance profiles (fallback in case Karpenter didn't)
-        logger.info("Step 4: Cleaning up Karpenter instance profiles...")
-        cleanup_instance_profiles(cluster_name, region, max_retries=3)
+        # Step 2: Clean up instance profiles
+        logger.info("Step 2: Cleaning up Karpenter instance profiles...")
+        cleanup_instance_profiles(cluster_name, region, max_retries=5)
         
+        logger.info("Cleanup completed successfully")
         return send_response(event, context, 'SUCCESS', {'Message': 'Karpenter resources cleaned up successfully'})
         
-    except subprocess.TimeoutExpired as e:
-        logger.error(f"Command timed out: {str(e)}")
-        # Return success to allow stack deletion to continue
-        return send_response(event, context, 'SUCCESS', {'Message': 'Cleanup attempted but timed out'})
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Command failed: {e.stderr}")
-        # Still return success to allow stack deletion to continue
-        return send_response(event, context, 'SUCCESS', {'Message': f'Cleanup attempted with warnings: {e.stderr}'})
     except Exception as e:
         logger.error(f"Unexpected error: {str(e)}")
         # Still return success to allow stack deletion to continue
@@ -226,4 +174,3 @@ def send_response(event, context, status, data):
     )
     
     return {'Status': status}
-
