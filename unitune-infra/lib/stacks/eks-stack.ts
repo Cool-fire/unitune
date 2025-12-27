@@ -8,22 +8,24 @@ import {
   Cluster,
   ClusterLoggingTypes,
   EndpointAccess,
+  IdentityType,
   KubernetesVersion,
   NodegroupAmiType,
   TaintEffect,
 } from 'aws-cdk-lib/aws-eks';
 import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
-import { InstanceType, IVpc, SecurityGroup, SubnetType } from 'aws-cdk-lib/aws-ec2';
+import { InstanceType, IVpc, SubnetType } from 'aws-cdk-lib/aws-ec2';
 import { Construct } from 'constructs/lib/construct';
 import {
   ArnPrincipal,
   Effect,
   ManagedPolicy,
-  OpenIdConnectPrincipal,
   PolicyStatement,
   Role,
   ServicePrincipal,
 } from 'aws-cdk-lib/aws-iam';
+import { Repository } from 'aws-cdk-lib/aws-ecr';
+import { BlockPublicAccess, Bucket, BucketEncryption } from 'aws-cdk-lib/aws-s3';
 import { Karpenter } from '../constructs/k8s/karpenter';
 import { KarpenterCleanup } from '../constructs/k8s/karpenter-cleanup';
 import { AwsCustomResource, AwsCustomResourcePolicy, PhysicalResourceId } from 'aws-cdk-lib/custom-resources';
@@ -41,6 +43,7 @@ export class EksStack extends cdk.Stack {
     super(scope, id, props);
     this.cluster = this.createCluster(props);
     this.installEksAddons(this.cluster);
+    this.configureBuildResources(this.cluster);
 
     // Create cleanup resource - this will run before Karpenter resources are deleted
     const karpenterCleanup = new KarpenterCleanup(this, 'KarpenterCleanup', {
@@ -221,5 +224,77 @@ export class EksStack extends cdk.Stack {
     //   clusterName: cluster.clusterName,
     //   resolveConflicts: 'OVERWRITE',
     // });
+  }
+
+  /**
+   * Provision shared build resources used by the deploy command:
+   *  - unique S3 bucket for build contexts
+   *  - single ECR repository for images
+   *  - builder namespace + service account using Pod Identity with scoped perms
+   *  - stack outputs for the CLI to discover
+   */
+  private configureBuildResources(cluster: Cluster): void {
+    // S3 bucket – leave bucketName undefined so CFN generates a unique name
+    const contextBucket = new Bucket(this, 'UnituneBuildContextBucket', {
+      bucketName: `unitune-buildctx-${cdk.Aws.ACCOUNT_ID}-${cdk.Aws.REGION}`,
+      blockPublicAccess: BlockPublicAccess.BLOCK_ALL,
+      encryption: BucketEncryption.S3_MANAGED,
+      lifecycleRules: [
+        {
+          prefix: 'contexts/',
+          expiration: cdk.Duration.days(7),
+        },
+      ],
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Single shared ECR repository
+    const repository = new Repository(this, 'UnituneEcrRepository', {
+      repositoryName: 'unitune',
+      imageScanOnPush: true,
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+
+    // Namespace + Service Account for privileged BuildKit Jobs
+    const buildNamespace = 'unitune-build';
+    cluster.addManifest('UnituneBuildNamespace', {
+      apiVersion: 'v1',
+      kind: 'Namespace',
+      metadata: { name: buildNamespace },
+    });
+
+    const builderServiceAccount = cluster.addServiceAccount('UnituneBuilderServiceAccount', {
+      namespace: buildNamespace,
+      name: 'unitune-builder',
+      identityType: IdentityType.POD_IDENTITY,
+    });
+
+    // Grant minimal S3 read access to contexts/*
+    contextBucket.grantRead(builderServiceAccount, 'contexts/*');
+
+    // Grant ECR push/pull and auth token
+    repository.grantPullPush(builderServiceAccount);
+    builderServiceAccount.addToPrincipalPolicy(
+      new PolicyStatement({
+        actions: ['ecr:GetAuthorizationToken'],
+        resources: ['*'],
+      }),
+    );
+
+    new cdk.CfnOutput(this, 'UnituneBuildContextBucketName', {
+      value: contextBucket.bucketName,
+    });
+
+    new cdk.CfnOutput(this, 'UnituneEcrRepositoryUri', {
+      value: repository.repositoryUri,
+    });
+
+    new cdk.CfnOutput(this, 'UnituneBuildNamespace', {
+      value: buildNamespace,
+    });
+
+    new cdk.CfnOutput(this, 'UnituneBuilderServiceAccount', {
+      value: builderServiceAccount.serviceAccountName,
+    });
   }
 }
