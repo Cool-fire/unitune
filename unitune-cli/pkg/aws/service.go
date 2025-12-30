@@ -3,9 +3,11 @@ package aws
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/sts"
 )
 
 func GetAwsConfig() (aws.Config, error) {
@@ -21,4 +23,19 @@ func GetAwsConfig() (aws.Config, error) {
 	}
 
 	return cfg, nil
+}
+
+func GetAccountID(cfg aws.Config) (string, error) {
+	stsClient := sts.NewFromConfig(cfg)
+
+	result, err := stsClient.GetCallerIdentity(context.TODO(), &sts.GetCallerIdentityInput{})
+	if err != nil {
+		return "", fmt.Errorf("failed to get account ID: %w", err)
+	}
+
+	if result.Account == nil {
+		return "", errors.New("account ID not found in caller identity")
+	}
+
+	return *result.Account, nil
 }
