@@ -2,6 +2,7 @@ package unitune
 
 import (
 	"github.com/Cool-fire/unitune/pkg/cmd/cli/configure"
+	"github.com/Cool-fire/unitune/pkg/cmd/cli/deploy"
 	"github.com/Cool-fire/unitune/pkg/cmd/cli/destroy"
 	"github.com/spf13/cobra"
 )
@@ -21,6 +22,7 @@ Unitune provisions optimized Kubernetes clusters with:
 	c.AddCommand(
 		configure.NewCommand(),
 		destroy.NewCommand(),
+		deploy.AddCommand(),
 	)
 
 	return c
