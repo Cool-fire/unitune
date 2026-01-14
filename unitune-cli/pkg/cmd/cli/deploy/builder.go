@@ -72,36 +72,44 @@ func BuildContainer(cfg BuilderConfig) error {
 	// Construct the cluster admin role ARN for EKS authentication
 	clusterAdminRoleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s-admin", accountID, defaultClusterName)
 
-	// Create K8s client (assumes the cluster admin role for authentication)
-	fmt.Println("🔌 Connecting to EKS cluster...")
-	k8sClient, err := k8s.NewK8sClientForEKS(cfg.AWSConfig, defaultClusterName, clusterAdminRoleArn)
-	if err != nil {
-		return fmt.Errorf("failed to connect to EKS cluster: %w", err)
-	}
-
 	// Render job from template
 	job, err := k8s.RenderBuildKitJob(params)
 	if err != nil {
 		return fmt.Errorf("failed to render build job: %w", err)
 	}
 
+	// Create BuildJob with configuration
+	buildJobConfig := k8s.BuildJobConfig{
+		JobName:           params.JobName,
+		InitContainerName: "aws-setup",
+		MainContainerName: "buildkit",
+		Timeout:           buildJobTimeout,
+	}
+
+	// Create BuildJob (assumes the cluster admin role for authentication)
+	fmt.Println("🔌 Connecting to EKS cluster...")
+	buildJob, err := k8s.NewBuildJobForEKS(cfg.AWSConfig, defaultClusterName, clusterAdminRoleArn, defaultNamespace, buildJobConfig, job)
+	if err != nil {
+		return fmt.Errorf("failed to connect to EKS cluster: %w", err)
+	}
+
 	// Create the job
-	fmt.Printf("🚀 Creating build job: %s\n", params.JobName)
-	if err := k8sClient.CreateJob(ctx, job); err != nil {
+	fmt.Printf("🚀 Creating build job: %s\n", buildJob.Name())
+	if err := buildJob.Create(ctx); err != nil {
 		return fmt.Errorf("failed to create build job: %w", err)
 	}
 
 	// Stream logs
 	fmt.Println("📋 Streaming build logs...")
 	go func() {
-		if err := k8sClient.StreamJobLogs(ctx, params.JobName, os.Stdout); err != nil {
+		if err := buildJob.StreamLogs(ctx, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to stream logs: %v\n", err)
 		}
 	}()
 
 	// Wait for job completion
 	fmt.Println("⏳ Waiting for build to complete...")
-	if err := k8sClient.WaitForJobCompletion(ctx, params.JobName, buildJobTimeout); err != nil {
+	if err := buildJob.WaitForCompletion(ctx); err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
 
