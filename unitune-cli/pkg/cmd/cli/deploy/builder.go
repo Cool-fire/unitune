@@ -142,7 +142,12 @@ func setupBuildJob(awsCfg awsclient.Config, accountID string, params k8s.BuildKi
 // NewBuildJobForEKS creates a BuildJob that connects to an EKS cluster
 // If roleArn is provided, the client will assume that role for authentication
 func NewBuildJobForEKS(cfg awsclient.Config, clusterName string, roleArn string, namespace string, buildJobConfig k8s.BuildJobConfig) (*k8s.BuildJob, error) {
-	k8sClient, err := aws.NewK8sClientForEKS(cfg, clusterName, roleArn, namespace)
+	eksService := aws.NewEksService(cfg)
+	if eksService == nil {
+		return nil, fmt.Errorf("failed to create EKS service")
+	}
+
+	k8sClient, err := eksService.NewK8sClientForEKS(clusterName, roleArn, namespace)
 	if err != nil {
 		return nil, err
 	}

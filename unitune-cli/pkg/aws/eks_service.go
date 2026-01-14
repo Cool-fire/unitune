@@ -18,11 +18,19 @@ type ClusterInfo struct {
 	CAData   []byte
 }
 
-// DescribeCluster retrieves information about an EKS cluster
-func DescribeCluster(ctx context.Context, cfg aws.Config, clusterName string) (*ClusterInfo, error) {
-	eksClient := eks.NewFromConfig(cfg)
+type EksService struct {
+	eksClient *eks.Client
+}
 
-	describeOutput, err := eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
+func NewEksService(cfg aws.Config) *EksService {
+	return &EksService{
+		eksClient: eks.NewFromConfig(cfg),
+	}
+}
+
+// DescribeCluster retrieves information about an EKS cluster
+func (s *EksService) DescribeCluster(ctx context.Context, clusterName string) (*ClusterInfo, error) {
+	describeOutput, err := s.eksClient.DescribeCluster(ctx, &eks.DescribeClusterInput{
 		Name: aws.String(clusterName),
 	})
 	if err != nil {
@@ -56,7 +64,7 @@ func DescribeCluster(ctx context.Context, cfg aws.Config, clusterName string) (*
 
 // GenerateEKSToken generates an authentication token for EKS cluster access
 // If roleArn is provided, the token will be generated using the assumed role
-func GenerateEKSToken(clusterName string, roleArn string) (string, error) {
+func generateEKSToken(clusterName string, roleArn string) (string, error) {
 	gen, err := token.NewGenerator(true, false)
 	if err != nil {
 		return "", fmt.Errorf("failed to create token generator: %w", err)
@@ -81,7 +89,7 @@ func GenerateEKSToken(clusterName string, roleArn string) (string, error) {
 }
 
 // CreateEKSRestConfig creates a Kubernetes REST config for connecting to an EKS cluster
-func CreateEKSRestConfig(clusterInfo *ClusterInfo, bearerToken string) *rest.Config {
+func createEKSRestConfig(clusterInfo *ClusterInfo, bearerToken string) *rest.Config {
 	return &rest.Config{
 		Host:        clusterInfo.Endpoint,
 		BearerToken: bearerToken,
@@ -93,25 +101,23 @@ func CreateEKSRestConfig(clusterInfo *ClusterInfo, bearerToken string) *rest.Con
 
 // NewK8sClientForEKS creates a K8s client that connects to an EKS cluster
 // If roleArn is provided, the client will assume that role for authentication
-func NewK8sClientForEKS(cfg aws.Config, clusterName string, roleArn string, namespace string) (*K8sClient, error) {
+func (s *EksService) NewK8sClientForEKS(clusterName string, roleArn string, namespace string) (*k8s.K8sClient, error) {
 	ctx := context.TODO()
 
 	// Get cluster information (endpoint and CA certificate)
-	clusterInfo, err := DescribeCluster(ctx, cfg, clusterName)
+	clusterInfo, err := s.DescribeCluster(ctx, clusterName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get cluster info: %w", err)
 	}
 
 	// Generate EKS authentication token
-	bearerToken, err := GenerateEKSToken(clusterName, roleArn)
+	bearerToken, err := generateEKSToken(clusterName, roleArn)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate EKS token: %w", err)
 	}
 
 	// Create REST config for Kubernetes client
-	restConfig := CreateEKSRestConfig(clusterInfo, bearerToken)
+	restConfig := createEKSRestConfig(clusterInfo, bearerToken)
 
 	return k8s.NewK8sClient(restConfig, namespace)
 }
-
-

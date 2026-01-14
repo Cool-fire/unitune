@@ -44,4 +44,3 @@ func GenerateBuildContextKey() string {
 	timestamp := time.Now().Format("20060102150405")
 	return fmt.Sprintf("contexts/%s.tar", timestamp)
 }
-
