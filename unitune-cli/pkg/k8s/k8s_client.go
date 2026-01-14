@@ -24,7 +24,8 @@ type K8sClient struct {
 }
 
 // NewK8sClientForEKS creates a K8s client that connects to an EKS cluster
-func NewK8sClientForEKS(cfg aws.Config, clusterName string) (*K8sClient, error) {
+// If roleArn is provided, the client will assume that role for authentication
+func NewK8sClientForEKS(cfg aws.Config, clusterName string, roleArn string) (*K8sClient, error) {
 	eksClient := eks.NewFromConfig(cfg)
 
 	// Describe the cluster to get endpoint and CA
@@ -52,9 +53,17 @@ func NewK8sClientForEKS(cfg aws.Config, clusterName string) (*K8sClient, error) 
 		return nil, fmt.Errorf("failed to create token generator: %w", err)
 	}
 
-	tok, err := gen.GetWithOptions(&token.GetTokenOptions{
+	tokenOpts := &token.GetTokenOptions{
 		ClusterID: clusterName,
-	})
+	}
+
+	// If a role ARN is provided, assume that role for authentication
+	if roleArn != "" {
+		tokenOpts.AssumeRoleARN = roleArn
+		tokenOpts.SessionName = "unitune-cli"
+	}
+
+	tok, err := gen.GetWithOptions(tokenOpts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get EKS token: %w", err)
 	}
@@ -122,9 +131,10 @@ func (k *K8sClient) WaitForJobCompletion(ctx context.Context, jobName string, ti
 
 // StreamJobLogs streams the logs from a job's pod to the provided writer
 func (k *K8sClient) StreamJobLogs(ctx context.Context, jobName string, out io.Writer) error {
-	// Wait for pod to be created
+	// Wait for pod to be created (up to 10 minutes for Karpenter node provisioning)
 	var podName string
-	for i := 0; i < 60; i++ {
+	fmt.Fprintln(out, "Waiting for pod to be scheduled...")
+	for i := 0; i < 300; i++ {
 		pods, err := k.clientset.CoreV1().Pods(k.namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: fmt.Sprintf("job-name=%s", jobName),
 		})
@@ -134,6 +144,7 @@ func (k *K8sClient) StreamJobLogs(ctx context.Context, jobName string, out io.Wr
 
 		if len(pods.Items) > 0 {
 			podName = pods.Items[0].Name
+			fmt.Fprintf(out, "Pod created: %s\n", podName)
 			break
 		}
 
@@ -141,10 +152,48 @@ func (k *K8sClient) StreamJobLogs(ctx context.Context, jobName string, out io.Wr
 	}
 
 	if podName == "" {
-		return fmt.Errorf("no pod found for job %s", jobName)
+		return fmt.Errorf("no pod found for job %s after 10 minutes", jobName)
 	}
 
-	// Wait for pod to be running or completed
+	// Wait for init container to start (up to 10 minutes for node provisioning)
+	fmt.Fprintln(out, "Waiting for init container to start...")
+	for i := 0; i < 300; i++ {
+		pod, err := k.clientset.CoreV1().Pods(k.namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return fmt.Errorf("failed to get pod: %w", err)
+		}
+
+		// Check if init container is running or completed
+		if len(pod.Status.InitContainerStatuses) > 0 {
+			initStatus := pod.Status.InitContainerStatuses[0]
+			if initStatus.State.Running != nil || initStatus.State.Terminated != nil {
+				break
+			}
+		}
+
+		// Also break if pod is already running (init completed)
+		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			break
+		}
+
+		time.Sleep(2 * time.Second)
+	}
+
+	// Stream init container logs first
+	fmt.Fprintln(out, "--- Init Container Logs (aws-setup) ---")
+	initReq := k.clientset.CoreV1().Pods(k.namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Follow:    true,
+		Container: "aws-setup",
+	})
+
+	initStream, err := initReq.Stream(ctx)
+	if err == nil {
+		io.Copy(out, initStream)
+		initStream.Close()
+	}
+
+	// Wait for main container to start
+	fmt.Fprintln(out, "--- Main Container Logs (buildkit) ---")
 	for i := 0; i < 60; i++ {
 		pod, err := k.clientset.CoreV1().Pods(k.namespace).Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
@@ -158,7 +207,7 @@ func (k *K8sClient) StreamJobLogs(ctx context.Context, jobName string, out io.Wr
 		time.Sleep(2 * time.Second)
 	}
 
-	// Stream logs
+	// Stream main container logs
 	req := k.clientset.CoreV1().Pods(k.namespace).GetLogs(podName, &corev1.PodLogOptions{
 		Follow:    true,
 		Container: "buildkit",

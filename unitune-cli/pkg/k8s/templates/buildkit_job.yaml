@@ -17,11 +17,19 @@ spec:
     spec:
       restartPolicy: Never
       serviceAccountName: "{{ .ServiceAccountName }}"
-      containers:
-        - name: buildkit
-          image: moby/buildkit:v0.13.0
-          securityContext:
-            privileged: true
+      nodeSelector:
+        kubernetes.io/os: linux
+        karpenter.sh/capacity-type: on-demand
+      volumes:
+        - name: build-context
+          emptyDir:
+            sizeLimit: 5Gi
+        - name: docker-config
+          emptyDir:
+            sizeLimit: 10Mi
+      initContainers:
+        - name: aws-setup
+          image: public.ecr.aws/bitnami/aws-cli:latest
           env:
             - name: S3_BUCKET
               value: "{{ .S3Bucket }}"
@@ -29,39 +37,72 @@ spec:
               value: "{{ .S3Key }}"
             - name: ECR_REGISTRY
               value: "{{ .ECRRegistry }}"
-            - name: IMAGE_NAME
-              value: "{{ .ImageName }}"
-            - name: IMAGE_TAG
-              value: "{{ .ImageTag }}"
             - name: AWS_REGION
               value: "{{ .AWSRegion }}"
+          volumeMounts:
+            - name: build-context
+              mountPath: /build
+            - name: docker-config
+              mountPath: /docker-config
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              echo "[1/3] Downloading build context from s3://${S3_BUCKET}/${S3_KEY}"
+              aws s3 cp "s3://${S3_BUCKET}/${S3_KEY}" - | tar -xC /build
+              echo "[2/3] Extracting build context ($(du -sh /build | cut -f1))"
+              echo "[3/3] Configuring ECR authentication"
+              mkdir -p /docker-config/.docker
+              ECR_PASSWORD=$(aws ecr get-login-password --region ${AWS_REGION})
+              cat > /docker-config/.docker/config.json <<EOF
+              {
+                "auths": {
+                  "${ECR_REGISTRY}": {
+                    "auth": "$(printf "AWS:%s" "${ECR_PASSWORD}" | base64 -w 0)"
+                  }
+                }
+              }
+              EOF
+              unset ECR_PASSWORD
+              echo "✓ Init complete"
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+      containers:
+        - name: buildkit
+          image: moby/buildkit:v0.13.0
+          securityContext:
+            privileged: true
+          env:
+            - name: IMAGE_URI
+              value: "{{ .ECRRegistry }}/{{ .ImageName }}:{{ .ImageTag }}"
+            - name: DOCKER_CONFIG
+              value: "/docker-config/.docker"
+          volumeMounts:
+            - name: build-context
+              mountPath: /build
+              readOnly: true
+            - name: docker-config
+              mountPath: /docker-config
+              readOnly: true
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
-              echo "📥 Downloading build context from S3..."
-              aws s3 cp s3://${S3_BUCKET}/${S3_KEY} /tmp/context.tar
-              
-              echo "📦 Extracting build context..."
-              mkdir -p /tmp/build
-              tar -xf /tmp/context.tar -C /tmp/build
-              
-              echo "🔐 Logging into ECR..."
-              aws ecr get-login-password --region ${AWS_REGION} | \
-                buildctl-daemonless.sh login --username AWS --password-stdin ${ECR_REGISTRY}
-              
-              echo "🔨 Building image..."
               buildctl-daemonless.sh build \
+                --progress=plain \
                 --frontend dockerfile.v0 \
-                --local context=/tmp/build \
-                --local dockerfile=/tmp/build \
-                --output type=image,name=${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG},push=true
-              
-              echo "✅ Image pushed: ${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+                --local context=/build \
+                --local dockerfile=/build \
+                --output type=image,name=${IMAGE_URI},push=true,compression=zstd,oci-mediatypes=true
           resources:
             requests:
-              cpu: "1"
-              memory: "2Gi"
+              cpu: "2"
+              memory: "4Gi"
             limits:
               cpu: "4"
               memory: "8Gi"

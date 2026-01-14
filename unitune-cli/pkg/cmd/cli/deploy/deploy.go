@@ -12,11 +12,13 @@ import (
 )
 
 type DeployOptions struct {
-	DryRun bool
+	DryRun    bool
+	ImageName string
 }
 
 func (o *DeployOptions) BindFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&o.DryRun, "dry-run", false, "Print the BuildKit job YAML without submitting to the cluster")
+	fs.StringVar(&o.ImageName, "image-name", "unitune", "ECR repository name for the image")
 }
 
 func (o *DeployOptions) Run(cmd *cobra.Command, args []string) error {
@@ -48,6 +50,7 @@ func (o *DeployOptions) Run(cmd *cobra.Command, args []string) error {
 		S3Bucket:   bucketName,
 		S3Key:      s3Key,
 		ContextDir: contextDir,
+		ImageName:  o.ImageName,
 		DryRun:     o.DryRun,
 	}
 

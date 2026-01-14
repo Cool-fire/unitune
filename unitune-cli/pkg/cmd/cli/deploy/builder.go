@@ -26,6 +26,7 @@ type BuilderConfig struct {
 	S3Bucket   string
 	S3Key      string
 	ContextDir string
+	ImageName  string
 	DryRun     bool
 }
 
@@ -39,16 +40,17 @@ func BuildContainer(cfg BuilderConfig) error {
 		return fmt.Errorf("failed to get AWS account ID: %w", err)
 	}
 
-	// Infer image name from directory
-	imageName := filepath.Base(cfg.ContextDir)
-	if imageName == "" || imageName == "." {
-		return fmt.Errorf("could not infer image name from context directory")
+	// Infer image tag from directory name
+	imageTag := filepath.Base(cfg.ContextDir)
+	if imageTag == "" || imageTag == "." {
+		return fmt.Errorf("could not infer image tag from context directory")
 	}
 
 	// Build timestamp for job naming
 	timestamp := time.Now().Format("20060102150405")
 
 	// Prepare job parameters
+	// Use the configured ECR repository (default: unitune) with directory name as tag
 	params := k8s.BuildKitJobParams{
 		JobName:            fmt.Sprintf("unitune-build-%s", timestamp),
 		Namespace:          defaultNamespace,
@@ -57,8 +59,8 @@ func BuildContainer(cfg BuilderConfig) error {
 		S3Bucket:           cfg.S3Bucket,
 		S3Key:              cfg.S3Key,
 		ECRRegistry:        fmt.Sprintf("%s.dkr.ecr.%s.amazonaws.com", accountID, cfg.AWSConfig.Region),
-		ImageName:          imageName,
-		ImageTag:           defaultImageTag,
+		ImageName:          cfg.ImageName,
+		ImageTag:           imageTag,
 		AWSRegion:          cfg.AWSConfig.Region,
 	}
 
@@ -67,9 +69,12 @@ func BuildContainer(cfg BuilderConfig) error {
 		return printJobYAML(params)
 	}
 
-	// Create K8s client
+	// Construct the cluster admin role ARN for EKS authentication
+	clusterAdminRoleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s-admin", accountID, defaultClusterName)
+
+	// Create K8s client (assumes the cluster admin role for authentication)
 	fmt.Println("🔌 Connecting to EKS cluster...")
-	k8sClient, err := k8s.NewK8sClientForEKS(cfg.AWSConfig, defaultClusterName)
+	k8sClient, err := k8s.NewK8sClientForEKS(cfg.AWSConfig, defaultClusterName, clusterAdminRoleArn)
 	if err != nil {
 		return fmt.Errorf("failed to connect to EKS cluster: %w", err)
 	}
@@ -100,7 +105,7 @@ func BuildContainer(cfg BuilderConfig) error {
 		return fmt.Errorf("build failed: %w", err)
 	}
 
-	fmt.Printf("✅ Image pushed: %s/%s:%s\n", params.ECRRegistry, imageName, defaultImageTag)
+	fmt.Printf("✅ Image pushed: %s/%s:%s\n", params.ECRRegistry, params.ImageName, params.ImageTag)
 	return nil
 }
 
