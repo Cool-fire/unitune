@@ -13,11 +13,13 @@ import (
 )
 
 const (
-	defaultClusterName    = "unitune-cluster"
-	defaultNamespace      = "unitune-build"
-	defaultServiceAccount = "unitune-builder"
-	defaultImageTag       = "latest"
-	buildJobTimeout       = 15 * time.Minute
+	defaultClusterName       = "unitune-cluster"
+	defaultNamespace         = "unitune-build"
+	defaultServiceAccount    = "unitune-builder"
+	defaultImageTag          = "latest"
+	defaultInitContainerName = "aws-setup"
+	defaultMainContainerName = "buildkit"
+	buildJobTimeout          = 15 * time.Minute
 )
 
 // BuilderConfig holds configuration for the container build process
@@ -69,28 +71,10 @@ func BuildContainer(cfg BuilderConfig) error {
 		return printJobYAML(params)
 	}
 
-	// Construct the cluster admin role ARN for EKS authentication
-	clusterAdminRoleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s-admin", accountID, defaultClusterName)
-
-	// Render job from template
-	job, err := k8s.RenderBuildKitJob(params)
+	// Setup the BuildJob on EKS
+	buildJob, err := setupBuildJob(cfg.AWSConfig, accountID, params)
 	if err != nil {
-		return fmt.Errorf("failed to render build job: %w", err)
-	}
-
-	// Create BuildJob with configuration
-	buildJobConfig := k8s.BuildJobConfig{
-		JobName:           params.JobName,
-		InitContainerName: "aws-setup",
-		MainContainerName: "buildkit",
-		Timeout:           buildJobTimeout,
-	}
-
-	// Create BuildJob (assumes the cluster admin role for authentication)
-	fmt.Println("🔌 Connecting to EKS cluster...")
-	buildJob, err := k8s.NewBuildJobForEKS(cfg.AWSConfig, defaultClusterName, clusterAdminRoleArn, defaultNamespace, buildJobConfig, job)
-	if err != nil {
-		return fmt.Errorf("failed to connect to EKS cluster: %w", err)
+		return err
 	}
 
 	// Create the job
@@ -128,4 +112,40 @@ func printJobYAML(params k8s.BuildKitJobParams) error {
 	fmt.Println("# Dry run - BuildKit Job YAML:")
 	fmt.Println(yamlContent)
 	return nil
+}
+
+// setupBuildJob prepares and connects to the EKS cluster to create a BuildJob
+func setupBuildJob(awsCfg awsclient.Config, accountID string, params k8s.BuildKitJobParams) (*k8s.BuildJob, error) {
+	// Construct the cluster admin role ARN for EKS authentication
+	clusterAdminRoleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s-admin", accountID, defaultClusterName)
+
+	// Render job from template
+	job, err := k8s.RenderBuildKitJob(params)
+	if err != nil {
+		return nil, fmt.Errorf("failed to render build job: %w", err)
+	}
+
+	// Create BuildJob with configuration
+	buildJobConfig := k8s.BuildJobConfig{
+		JobName:           params.JobName,
+		InitContainerName: defaultInitContainerName,
+		MainContainerName: defaultMainContainerName,
+		Timeout:           buildJobTimeout,
+		JobSpec:           job,
+	}
+
+	// Create BuildJob (assumes the cluster admin role for authentication)
+	fmt.Println("🔌 Connecting to EKS cluster...")
+	return NewBuildJobForEKS(awsCfg, defaultClusterName, clusterAdminRoleArn, defaultNamespace, buildJobConfig)
+}
+
+// NewBuildJobForEKS creates a BuildJob that connects to an EKS cluster
+// If roleArn is provided, the client will assume that role for authentication
+func NewBuildJobForEKS(cfg awsclient.Config, clusterName string, roleArn string, namespace string, buildJobConfig k8s.BuildJobConfig) (*k8s.BuildJob, error) {
+	k8sClient, err := aws.NewK8sClientForEKS(cfg, clusterName, roleArn, namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	return k8s.NewBuildJob(buildJobConfig, k8sClient), nil
 }

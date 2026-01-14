@@ -17,27 +17,26 @@ type BuildJobConfig struct {
 	InitContainerName string
 	MainContainerName string
 	Timeout           time.Duration
+	JobSpec           *batchv1.Job
 }
 
 // BuildJob represents a Kubernetes build job with its configuration
 type BuildJob struct {
 	config    BuildJobConfig
 	k8sClient *K8sClient
-	jobSpec   *batchv1.Job
 }
 
 // NewBuildJob creates a new BuildJob with the given configuration and Kubernetes client
-func NewBuildJob(config BuildJobConfig, k8sClient *K8sClient, jobSpec *batchv1.Job) *BuildJob {
+func NewBuildJob(config BuildJobConfig, k8sClient *K8sClient) *BuildJob {
 	return &BuildJob{
 		config:    config,
 		k8sClient: k8sClient,
-		jobSpec:   jobSpec,
 	}
 }
 
 // Create creates the Kubernetes Job
 func (b *BuildJob) Create(ctx context.Context) error {
-	_, err := b.k8sClient.clientset.BatchV1().Jobs(b.k8sClient.namespace).Create(ctx, b.jobSpec, metav1.CreateOptions{})
+	_, err := b.k8sClient.clientset.BatchV1().Jobs(b.k8sClient.namespace).Create(ctx, b.config.JobSpec, metav1.CreateOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to create job %s: %w", b.config.JobName, err)
 	}

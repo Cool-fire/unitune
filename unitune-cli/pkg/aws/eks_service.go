@@ -1,13 +1,13 @@
-package k8s
+package aws
 
 import (
 	"context"
 	"encoding/base64"
 	"fmt"
 
+	"github.com/Cool-fire/unitune/pkg/k8s"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
-	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/aws-iam-authenticator/pkg/token"
 )
@@ -111,15 +111,7 @@ func NewK8sClientForEKS(cfg aws.Config, clusterName string, roleArn string, name
 	// Create REST config for Kubernetes client
 	restConfig := CreateEKSRestConfig(clusterInfo, bearerToken)
 
-	return NewK8sClient(restConfig, namespace)
+	return k8s.NewK8sClient(restConfig, namespace)
 }
 
-// NewBuildJobForEKS creates a BuildJob that connects to an EKS cluster
-// If roleArn is provided, the client will assume that role for authentication
-func NewBuildJobForEKS(cfg aws.Config, clusterName string, roleArn string, namespace string, buildJobConfig BuildJobConfig, jobSpec *batchv1.Job) (*BuildJob, error) {
-	k8sClient, err := NewK8sClientForEKS(cfg, clusterName, roleArn, namespace)
-	if err != nil {
-		return nil, err
-	}
-	return NewBuildJob(buildJobConfig, k8sClient, jobSpec), nil
-}
+

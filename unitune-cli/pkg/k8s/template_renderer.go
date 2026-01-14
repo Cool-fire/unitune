@@ -25,6 +25,31 @@ type BuildKitJobParams struct {
 
 // RenderBuildKitJob renders the BuildKit job template with the given parameters
 func RenderBuildKitJob(params BuildKitJobParams) (*batchv1.Job, error) {
+	rendered, err := renderBuildKitJobBytes(params)
+	if err != nil {
+		return nil, err
+	}
+
+	var job batchv1.Job
+	if err := yaml.Unmarshal(rendered, &job); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal rendered job yaml: %w", err)
+	}
+
+	return &job, nil
+}
+
+// RenderBuildKitJobYAML renders the BuildKit job template and returns the raw YAML string
+func RenderBuildKitJobYAML(params BuildKitJobParams) (string, error) {
+	rendered, err := renderBuildKitJobBytes(params)
+	if err != nil {
+		return "", err
+	}
+
+	return string(rendered), nil
+}
+
+// renderBuildKitJobBytes renders the BuildKit job template and returns the bytes
+func renderBuildKitJobBytes(params BuildKitJobParams) ([]byte, error) {
 	templateContent, err := TemplatesFS.ReadFile("templates/buildkit_job.yaml")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read buildkit job template: %w", err)
@@ -40,30 +65,5 @@ func RenderBuildKitJob(params BuildKitJobParams) (*batchv1.Job, error) {
 		return nil, fmt.Errorf("failed to render buildkit job template: %w", err)
 	}
 
-	var job batchv1.Job
-	if err := yaml.Unmarshal(rendered.Bytes(), &job); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal rendered job yaml: %w", err)
-	}
-
-	return &job, nil
-}
-
-// RenderBuildKitJobYAML renders the BuildKit job template and returns the raw YAML string
-func RenderBuildKitJobYAML(params BuildKitJobParams) (string, error) {
-	templateContent, err := TemplatesFS.ReadFile("templates/buildkit_job.yaml")
-	if err != nil {
-		return "", fmt.Errorf("failed to read buildkit job template: %w", err)
-	}
-
-	tmpl, err := template.New("buildkit-job").Parse(string(templateContent))
-	if err != nil {
-		return "", fmt.Errorf("failed to parse buildkit job template: %w", err)
-	}
-
-	var rendered bytes.Buffer
-	if err := tmpl.Execute(&rendered, params); err != nil {
-		return "", fmt.Errorf("failed to render buildkit job template: %w", err)
-	}
-
-	return rendered.String(), nil
+	return rendered.Bytes(), nil
 }
