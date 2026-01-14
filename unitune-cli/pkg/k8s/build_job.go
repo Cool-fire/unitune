@@ -81,101 +81,119 @@ func (b *BuildJob) WaitForCompletion(ctx context.Context) error {
 }
 
 // StreamLogs streams the logs from the job's pod to the provided writer
+// StreamLogs streams the logs from the job's pod to the provided writer
 func (b *BuildJob) StreamLogs(ctx context.Context, out io.Writer) error {
-	// Wait for pod to be created (up to 10 minutes)
-	var podName string
+	// 1. Get the pod associated with the job
 	fmt.Fprintln(out, "Waiting for pod to be scheduled...")
-	for i := 0; i < 300; i++ {
-		pods, err := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("job-name=%s", b.config.JobName),
-		})
-		if err != nil {
-			return fmt.Errorf("failed to list pods for job: %w", err)
-		}
-
-		if len(pods.Items) > 0 {
-			podName = pods.Items[0].Name
-			fmt.Fprintf(out, "Pod created: %s\n", podName)
-			break
-		}
-
-		time.Sleep(2 * time.Second)
+	pod, err := b.getJobPod(ctx)
+	if err != nil {
+		return err
 	}
+	fmt.Fprintf(out, "Pod scheduled: %s\n", pod.Name)
 
-	if podName == "" {
-		return fmt.Errorf("no pod found for job %s after 10 minutes", b.config.JobName)
-	}
-
-	// Wait for init container to start (up to 10 minutes)
+	// 2. Handle Init Container
 	if b.config.InitContainerName != "" {
-		fmt.Fprintln(out, "Waiting for init container to start...")
-		for i := 0; i < 300; i++ {
+		fmt.Fprintf(out, "Waiting for init container %s to start...\n", b.config.InitContainerName)
+		if err := b.waitForContainer(ctx, pod.Name, b.config.InitContainerName, true); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "--- Init Container Logs (%s) ---\n", b.config.InitContainerName)
+		if err := b.streamContainerLogs(ctx, pod.Name, b.config.InitContainerName, out); err != nil {
+			fmt.Fprintf(out, "Warning: failed to stream init logs: %v\n", err)
+		}
+	}
+
+	// 3. Handle Main Container
+	fmt.Fprintf(out, "Waiting for main container %s to start...\n", b.config.MainContainerName)
+	if err := b.waitForContainer(ctx, pod.Name, b.config.MainContainerName, false); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "--- Main Container Logs (%s) ---\n", b.config.MainContainerName)
+	return b.streamContainerLogs(ctx, pod.Name, b.config.MainContainerName, out)
+}
+
+// getJobPod retrieves the pod associated with the build job, polling until it exists
+func (b *BuildJob) getJobPod(ctx context.Context) (*corev1.Pod, error) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			pods, err := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).List(ctx, metav1.ListOptions{
+				LabelSelector: fmt.Sprintf("job-name=%s", b.config.JobName),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to list pods: %w", err)
+			}
+
+			if len(pods.Items) > 0 {
+				return &pods.Items[0], nil
+			}
+		}
+	}
+}
+
+// waitForContainer waits until the specified container is in a state where logs can be streamed
+func (b *BuildJob) waitForContainer(ctx context.Context, podName, containerName string, isInit bool) error {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
 			pod, err := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).Get(ctx, podName, metav1.GetOptions{})
 			if err != nil {
 				return fmt.Errorf("failed to get pod: %w", err)
 			}
 
-			// Check if init container is running or completed
-			if len(pod.Status.InitContainerStatuses) > 0 {
-				initStatus := pod.Status.InitContainerStatuses[0]
-				if initStatus.State.Running != nil || initStatus.State.Terminated != nil {
+			var containerStatus *corev1.ContainerStatus
+			statuses := pod.Status.ContainerStatuses
+			if isInit {
+				statuses = pod.Status.InitContainerStatuses
+			}
+
+			for _, s := range statuses {
+				if s.Name == containerName {
+					containerStatus = &s
 					break
 				}
 			}
 
-			// Also break if pod is already running (init completed)
-			if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-				break
+			if containerStatus != nil {
+				// Container is running or finished, we can stream logs
+				if containerStatus.State.Running != nil || containerStatus.State.Terminated != nil {
+					return nil
+				}
 			}
 
-			time.Sleep(2 * time.Second)
-		}
-
-		// Stream init container logs
-		fmt.Fprintf(out, "--- Init Container Logs (%s) ---\n", b.config.InitContainerName)
-		initReq := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).GetLogs(podName, &corev1.PodLogOptions{
-			Follow:    true,
-			Container: b.config.InitContainerName,
-		})
-
-		initStream, err := initReq.Stream(ctx)
-		if err == nil {
-			io.Copy(out, initStream)
-			initStream.Close()
+			// Fail if pod itself failed
+			if pod.Status.Phase == corev1.PodFailed {
+				return fmt.Errorf("pod %s failed while waiting for container %s", podName, containerName)
+			}
 		}
 	}
+}
 
-	// Wait for main container to start
-	fmt.Fprintln(out, "Waiting for main container to start...")
-	for i := 0; i < 60; i++ {
-		pod, err := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).Get(ctx, podName, metav1.GetOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to get pod: %w", err)
-		}
+// streamContainerLogs streams the logs of a specific container to the writer
+func (b *BuildJob) streamContainerLogs(ctx context.Context, podName, containerName string, out io.Writer) error {
+	req := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Follow:    true,
+		Container: containerName,
+	})
 
-		if pod.Status.Phase == corev1.PodRunning || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			break
-		}
-
-		time.Sleep(2 * time.Second)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open log stream for %s: %w", containerName, err)
 	}
+	defer stream.Close()
 
-	// Stream main container logs
-	if b.config.MainContainerName != "" {
-		fmt.Fprintf(out, "--- Main Container Logs (%s) ---\n", b.config.MainContainerName)
-		req := b.k8sClient.clientset.CoreV1().Pods(b.k8sClient.namespace).GetLogs(podName, &corev1.PodLogOptions{
-			Follow:    true,
-			Container: b.config.MainContainerName,
-		})
-
-		stream, err := req.Stream(ctx)
-		if err != nil {
-			return fmt.Errorf("failed to stream logs: %w", err)
-		}
-		defer stream.Close()
-
-		_, err = io.Copy(out, stream)
-		return err
+	if _, err := io.Copy(out, stream); err != nil && err != io.EOF {
+		return fmt.Errorf("error copying logs for %s: %w", containerName, err)
 	}
 
 	return nil
