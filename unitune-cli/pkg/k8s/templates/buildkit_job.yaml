@@ -1,0 +1,67 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: "{{ .JobName }}"
+  namespace: "{{ .Namespace }}"
+  labels:
+    app: unitune-builder
+    build-id: "{{ .BuildID }}"
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        app: unitune-builder
+        build-id: "{{ .BuildID }}"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: "{{ .ServiceAccountName }}"
+      containers:
+        - name: buildkit
+          image: moby/buildkit:v0.13.0
+          securityContext:
+            privileged: true
+          env:
+            - name: S3_BUCKET
+              value: "{{ .S3Bucket }}"
+            - name: S3_KEY
+              value: "{{ .S3Key }}"
+            - name: ECR_REGISTRY
+              value: "{{ .ECRRegistry }}"
+            - name: IMAGE_NAME
+              value: "{{ .ImageName }}"
+            - name: IMAGE_TAG
+              value: "{{ .ImageTag }}"
+            - name: AWS_REGION
+              value: "{{ .AWSRegion }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              echo "📥 Downloading build context from S3..."
+              aws s3 cp s3://${S3_BUCKET}/${S3_KEY} /tmp/context.tar
+              
+              echo "📦 Extracting build context..."
+              mkdir -p /tmp/build
+              tar -xf /tmp/context.tar -C /tmp/build
+              
+              echo "🔐 Logging into ECR..."
+              aws ecr get-login-password --region ${AWS_REGION} | \
+                buildctl-daemonless.sh login --username AWS --password-stdin ${ECR_REGISTRY}
+              
+              echo "🔨 Building image..."
+              buildctl-daemonless.sh build \
+                --frontend dockerfile.v0 \
+                --local context=/tmp/build \
+                --local dockerfile=/tmp/build \
+                --output type=image,name=${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG},push=true
+              
+              echo "✅ Image pushed: ${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}"
+          resources:
+            requests:
+              cpu: "1"
+              memory: "2Gi"
+            limits:
+              cpu: "4"
+              memory: "8Gi"

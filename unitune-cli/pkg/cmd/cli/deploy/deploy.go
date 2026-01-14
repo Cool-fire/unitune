@@ -12,10 +12,11 @@ import (
 )
 
 type DeployOptions struct {
+	DryRun bool
 }
 
 func (o *DeployOptions) BindFlags(fs *pflag.FlagSet) {
-
+	fs.BoolVar(&o.DryRun, "dry-run", false, "Print the BuildKit job YAML without submitting to the cluster")
 }
 
 func (o *DeployOptions) Run(cmd *cobra.Command, args []string) error {
@@ -39,6 +40,19 @@ func (o *DeployOptions) Run(cmd *cobra.Command, args []string) error {
 
 	if err := uploadBuildContext(s3Service, bucketName, s3Key, contextDir, dockerfile); err != nil {
 		return fmt.Errorf("failed to upload build context: %w", err)
+	}
+
+	// Build container using BuildKit on EKS
+	builderCfg := BuilderConfig{
+		AWSConfig:  cfg,
+		S3Bucket:   bucketName,
+		S3Key:      s3Key,
+		ContextDir: contextDir,
+		DryRun:     o.DryRun,
+	}
+
+	if err := BuildContainer(builderCfg); err != nil {
+		return fmt.Errorf("failed to build container: %w", err)
 	}
 
 	return nil
@@ -105,8 +119,8 @@ func AddCommand() *cobra.Command {
 
 	c := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy the unitune infrastructure",
-		Long:  "Deploy the unitune infrastructure",
+		Short: "Build and deploy a container image",
+		Long:  "Upload build context to S3 and build a container image using BuildKit on EKS",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return o.Run(cmd, args)
 		},
