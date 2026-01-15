@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/Cool-fire/unitune/pkg/aws"
@@ -16,7 +17,6 @@ const (
 	defaultClusterName       = "unitune-cluster"
 	defaultNamespace         = "unitune-build"
 	defaultServiceAccount    = "unitune-builder"
-	defaultImageTag          = "latest"
 	defaultInitContainerName = "aws-setup"
 	defaultMainContainerName = "buildkit"
 	buildJobTimeout          = 15 * time.Minute
@@ -71,21 +71,24 @@ func BuildContainer(cfg BuilderConfig) error {
 		return printJobYAML(params)
 	}
 
-	// Setup the BuildJob on EKS
-	buildJob, err := setupBuildJob(cfg.AWSConfig, accountID, params)
+	// Create the BuildJob on EKS
+	buildJob, err := createBuildJob(cfg.AWSConfig, accountID, params)
 	if err != nil {
 		return err
 	}
 
 	// Create the job
-	fmt.Printf("🚀 Creating build job: %s\n", buildJob.Name())
+	fmt.Printf("🚀 Creating build job: %s\n", params.JobName)
 	if err := buildJob.Create(ctx); err != nil {
 		return fmt.Errorf("failed to create build job: %w", err)
 	}
 
-	// Stream logs
+	// Stream logs in background with synchronization
 	fmt.Println("📋 Streaming build logs...")
+	var logWg sync.WaitGroup
+	logWg.Add(1)
 	go func() {
+		defer logWg.Done()
 		if err := buildJob.StreamLogs(ctx, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: failed to stream logs: %v\n", err)
 		}
@@ -96,6 +99,9 @@ func BuildContainer(cfg BuilderConfig) error {
 	if err := buildJob.WaitForCompletion(ctx); err != nil {
 		return fmt.Errorf("build failed: %w", err)
 	}
+
+	// Wait for log streaming to finish
+	logWg.Wait()
 
 	fmt.Printf("✅ Image pushed: %s/%s:%s\n", params.ECRRegistry, params.ImageName, params.ImageTag)
 	return nil
@@ -114,18 +120,15 @@ func printJobYAML(params k8s.BuildKitJobParams) error {
 	return nil
 }
 
-// setupBuildJob prepares and connects to the EKS cluster to create a BuildJob
-func setupBuildJob(awsCfg awsclient.Config, accountID string, params k8s.BuildKitJobParams) (*k8s.BuildJob, error) {
-	// Construct the cluster admin role ARN for EKS authentication
-	clusterAdminRoleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s-admin", accountID, defaultClusterName)
-
+// createBuildJob connects to EKS and creates a BuildJob ready for submission
+func createBuildJob(awsCfg awsclient.Config, accountID string, params k8s.BuildKitJobParams) (*k8s.BuildJob, error) {
 	// Render job from template
 	job, err := k8s.RenderBuildKitJob(params)
 	if err != nil {
 		return nil, fmt.Errorf("failed to render build job: %w", err)
 	}
 
-	// Create BuildJob with configuration
+	// Prepare job configuration
 	buildJobConfig := k8s.BuildJobConfig{
 		JobName:           params.JobName,
 		InitContainerName: defaultInitContainerName,
@@ -134,22 +137,18 @@ func setupBuildJob(awsCfg awsclient.Config, accountID string, params k8s.BuildKi
 		JobSpec:           job,
 	}
 
-	// Create BuildJob (assumes the cluster admin role for authentication)
+	// Connect to EKS cluster
 	fmt.Println("🔌 Connecting to EKS cluster...")
-	return NewBuildJobForEKS(awsCfg, defaultClusterName, clusterAdminRoleArn, defaultNamespace, buildJobConfig)
-}
+	clusterAdminRoleArn := fmt.Sprintf("arn:aws:iam::%s:role/%s-admin", accountID, defaultClusterName)
 
-// NewBuildJobForEKS creates a BuildJob that connects to an EKS cluster
-// If roleArn is provided, the client will assume that role for authentication
-func NewBuildJobForEKS(cfg awsclient.Config, clusterName string, roleArn string, namespace string, buildJobConfig k8s.BuildJobConfig) (*k8s.BuildJob, error) {
-	eksService := aws.NewEksService(cfg)
+	eksService := aws.NewEksService(awsCfg)
 	if eksService == nil {
 		return nil, fmt.Errorf("failed to create EKS service")
 	}
 
-	k8sClient, err := eksService.NewK8sClientForEKS(clusterName, roleArn, namespace)
+	k8sClient, err := eksService.NewK8sClientForEKS(defaultClusterName, clusterAdminRoleArn, defaultNamespace)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to connect to EKS: %w", err)
 	}
 
 	return k8s.NewBuildJob(buildJobConfig, k8sClient), nil

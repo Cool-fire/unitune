@@ -18,8 +18,8 @@ type BuildKitJobParams struct {
 	S3Bucket           string // unitune-buildctx-{accountId}-{region}
 	S3Key              string // contexts/<timestamp>.tar
 	ECRRegistry        string // {accountId}.dkr.ecr.{region}.amazonaws.com
-	ImageName          string // Inferred from directory name
-	ImageTag           string // Always "latest"
+	ImageName          string // Repository name from config
+	ImageTag           string // Set from context directory name
 	AWSRegion          string // From AWS config
 }
 

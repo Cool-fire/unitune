@@ -11,6 +11,14 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Polling intervals for job and container status checks
+const (
+	jobStatusCheckInterval = 5 * time.Second
+	podDiscoveryInterval   = 2 * time.Second
+	containerReadyInterval = 2 * time.Second
+	defaultJobTimeout      = 15 * time.Minute
+)
+
 // BuildJobConfig holds configuration for a build job
 type BuildJobConfig struct {
 	JobName           string
@@ -47,10 +55,10 @@ func (b *BuildJob) Create(ctx context.Context) error {
 func (b *BuildJob) WaitForCompletion(ctx context.Context) error {
 	timeout := b.config.Timeout
 	if timeout == 0 {
-		timeout = 15 * time.Minute // default timeout
+		timeout = defaultJobTimeout
 	}
 
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(jobStatusCheckInterval)
 	defer ticker.Stop()
 
 	timeoutCh := time.After(timeout)
@@ -81,7 +89,6 @@ func (b *BuildJob) WaitForCompletion(ctx context.Context) error {
 }
 
 // StreamLogs streams the logs from the job's pod to the provided writer
-// StreamLogs streams the logs from the job's pod to the provided writer
 func (b *BuildJob) StreamLogs(ctx context.Context, out io.Writer) error {
 	// 1. Get the pod associated with the job
 	fmt.Fprintln(out, "Waiting for pod to be scheduled...")
@@ -94,7 +101,7 @@ func (b *BuildJob) StreamLogs(ctx context.Context, out io.Writer) error {
 	// 2. Handle Init Container
 	if b.config.InitContainerName != "" {
 		fmt.Fprintf(out, "Waiting for init container %s to start...\n", b.config.InitContainerName)
-		if err := b.waitForContainer(ctx, pod.Name, b.config.InitContainerName, true); err != nil {
+		if err := b.waitForInitContainer(ctx, pod.Name, b.config.InitContainerName); err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "--- Init Container Logs (%s) ---\n", b.config.InitContainerName)
@@ -105,7 +112,7 @@ func (b *BuildJob) StreamLogs(ctx context.Context, out io.Writer) error {
 
 	// 3. Handle Main Container
 	fmt.Fprintf(out, "Waiting for main container %s to start...\n", b.config.MainContainerName)
-	if err := b.waitForContainer(ctx, pod.Name, b.config.MainContainerName, false); err != nil {
+	if err := b.waitForMainContainer(ctx, pod.Name, b.config.MainContainerName); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "--- Main Container Logs (%s) ---\n", b.config.MainContainerName)
@@ -114,7 +121,7 @@ func (b *BuildJob) StreamLogs(ctx context.Context, out io.Writer) error {
 
 // getJobPod retrieves the pod associated with the build job, polling until it exists
 func (b *BuildJob) getJobPod(ctx context.Context) (*corev1.Pod, error) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(podDiscoveryInterval)
 	defer ticker.Stop()
 
 	for {
@@ -136,9 +143,19 @@ func (b *BuildJob) getJobPod(ctx context.Context) (*corev1.Pod, error) {
 	}
 }
 
-// waitForContainer waits until the specified container is in a state where logs can be streamed
-func (b *BuildJob) waitForContainer(ctx context.Context, podName, containerName string, isInit bool) error {
-	ticker := time.NewTicker(2 * time.Second)
+// waitForInitContainer waits until the init container is ready for log streaming
+func (b *BuildJob) waitForInitContainer(ctx context.Context, podName, containerName string) error {
+	return b.waitForContainerReady(ctx, podName, containerName, true)
+}
+
+// waitForMainContainer waits until the main container is ready for log streaming
+func (b *BuildJob) waitForMainContainer(ctx context.Context, podName, containerName string) error {
+	return b.waitForContainerReady(ctx, podName, containerName, false)
+}
+
+// waitForContainerReady polls until the container is running or terminated
+func (b *BuildJob) waitForContainerReady(ctx context.Context, podName, containerName string, isInit bool) error {
+	ticker := time.NewTicker(containerReadyInterval)
 	defer ticker.Stop()
 
 	for {
@@ -151,22 +168,15 @@ func (b *BuildJob) waitForContainer(ctx context.Context, podName, containerName 
 				return fmt.Errorf("failed to get pod: %w", err)
 			}
 
-			var containerStatus *corev1.ContainerStatus
+			// Select the appropriate status list
 			statuses := pod.Status.ContainerStatuses
 			if isInit {
 				statuses = pod.Status.InitContainerStatuses
 			}
 
-			for _, s := range statuses {
-				if s.Name == containerName {
-					containerStatus = &s
-					break
-				}
-			}
-
-			if containerStatus != nil {
-				// Container is running or finished, we can stream logs
-				if containerStatus.State.Running != nil || containerStatus.State.Terminated != nil {
+			// Find the container status
+			if status := findContainerStatus(statuses, containerName); status != nil {
+				if status.State.Running != nil || status.State.Terminated != nil {
 					return nil
 				}
 			}
@@ -177,6 +187,16 @@ func (b *BuildJob) waitForContainer(ctx context.Context, podName, containerName 
 			}
 		}
 	}
+}
+
+// findContainerStatus finds a container's status by name
+func findContainerStatus(statuses []corev1.ContainerStatus, name string) *corev1.ContainerStatus {
+	for i := range statuses {
+		if statuses[i].Name == name {
+			return &statuses[i]
+		}
+	}
+	return nil
 }
 
 // streamContainerLogs streams the logs of a specific container to the writer
@@ -199,19 +219,3 @@ func (b *BuildJob) streamContainerLogs(ctx context.Context, podName, containerNa
 	return nil
 }
 
-// Delete deletes the job and its pods
-func (b *BuildJob) Delete(ctx context.Context) error {
-	propagationPolicy := metav1.DeletePropagationForeground
-	err := b.k8sClient.clientset.BatchV1().Jobs(b.k8sClient.namespace).Delete(ctx, b.config.JobName, metav1.DeleteOptions{
-		PropagationPolicy: &propagationPolicy,
-	})
-	if err != nil {
-		return fmt.Errorf("failed to delete job %s: %w", b.config.JobName, err)
-	}
-	return nil
-}
-
-// Name returns the job name
-func (b *BuildJob) Name() string {
-	return b.config.JobName
-}
