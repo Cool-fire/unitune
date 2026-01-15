@@ -50,6 +50,14 @@
             "Resource": "*"
         },
         {
+            "Sid": "STSPermissions",
+            "Effect": "Allow",
+            "Action": [
+                "sts:AssumeRole"
+            ],
+            "Resource": "arn:aws:iam::*:role/unitune-cluster-admin"
+        },
+        {
             "Sid": "S3Permissions",
             "Effect": "Allow",
             "Action": [
