@@ -245,14 +245,16 @@ export class EksStack extends cdk.Stack {
           expiration: cdk.Duration.days(7),
         },
       ],
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
     });
 
     // Single shared ECR repository
     const repository = new Repository(this, 'UnituneEcrRepository', {
       repositoryName: 'unitune',
       imageScanOnPush: true,
-      removalPolicy: cdk.RemovalPolicy.RETAIN,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      emptyOnDelete: true,
     });
 
     // Namespace + Service Account for privileged BuildKit Jobs
